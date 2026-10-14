@@ -87,6 +87,25 @@ var memoryConfigBlockRe = regexp.MustCompile(
 	`(?ms)^` + regexp.QuoteMeta(multicaMemoryConfigBeginMarker) +
 		`.*?^` + regexp.QuoteMeta(multicaMemoryConfigEndMarker) + `\n*`)
 
+// stripManagedCodexMemoryConfig removes only the daemon's old disabling blocks
+// when a task explicitly switches to shared native data. The freshly copied
+// user's directives remain authoritative; no native memory files are edited.
+func stripManagedCodexMemoryConfig(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	content := memoryFeatureBlockRe.ReplaceAllString(string(data), "")
+	content = memoryConfigBlockRe.ReplaceAllString(content, "")
+	if content == string(data) {
+		return nil
+	}
+	return os.WriteFile(configPath, []byte(content), 0o644)
+}
+
 var (
 	// matches a top-level `[memories]` table header.
 	rootMemoriesTableHeaderRe = regexp.MustCompile(`^\s*\[\s*memories\s*\]\s*(?:#.*)?$`)

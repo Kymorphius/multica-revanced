@@ -108,6 +108,7 @@ func init() {
 	f.Duration("agent-timeout", 0, "Absolute per-run wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
 	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
 	f.Duration("codex-handshake-timeout", 0, "Codex app-server startup RPC timeout (env: MULTICA_CODEX_HANDSHAKE_TIMEOUT)")
+	f.Bool("codex-shared-home", false, "Use the user's common Codex memory and session store (env: MULTICA_CODEX_SHARED_HOME)")
 	f.Int("max-concurrent-tasks", 0, "Maximum concurrent runs (env: MULTICA_DAEMON_MAX_CONCURRENT_TASKS)")
 	f.Bool("no-auto-update", false, "Disable periodic CLI self-update (env: MULTICA_DAEMON_AUTO_UPDATE=false)")
 	f.Duration("auto-update-interval", 0, "How often to poll GitHub for a newer release (env: MULTICA_DAEMON_AUTO_UPDATE_INTERVAL)")
@@ -131,6 +132,7 @@ func init() {
 	rf.Duration("agent-timeout", 0, "Absolute per-run wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
 	rf.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
 	rf.Duration("codex-handshake-timeout", 0, "Codex app-server startup RPC timeout (env: MULTICA_CODEX_HANDSHAKE_TIMEOUT)")
+	rf.Bool("codex-shared-home", false, "Use the user's common Codex memory and session store (env: MULTICA_CODEX_SHARED_HOME)")
 	rf.Int("max-concurrent-tasks", 0, "Maximum concurrent runs (env: MULTICA_DAEMON_MAX_CONCURRENT_TASKS)")
 	rf.Bool("no-auto-update", false, "Disable periodic CLI self-update (env: MULTICA_DAEMON_AUTO_UPDATE=false)")
 	rf.Duration("auto-update-interval", 0, "How often to poll GitHub for a newer release (env: MULTICA_DAEMON_AUTO_UPDATE_INTERVAL)")
@@ -908,6 +910,10 @@ func buildDaemonStartArgs(cmd *cobra.Command) []string {
 	if d, _ := cmd.Flags().GetDuration("codex-handshake-timeout"); d > 0 {
 		args = append(args, "--codex-handshake-timeout", d.String())
 	}
+	if cmd.Flags().Changed("codex-shared-home") {
+		value, _ := cmd.Flags().GetBool("codex-shared-home")
+		args = append(args, "--codex-shared-home="+strconv.FormatBool(value))
+	}
 	if n, _ := cmd.Flags().GetInt("max-concurrent-tasks"); n > 0 {
 		args = append(args, "--max-concurrent-tasks", strconv.Itoa(n))
 	}
@@ -1012,6 +1018,10 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		WorkspacesRoot: workspacesRoot,
 		Profile:        profile,
 		HealthPort:     healthPortForProfile(profile),
+	}
+	overrides.CodexSharedHome, err = codexSharedHomeFlag(cmd)
+	if err != nil {
+		return err
 	}
 	pollFlag, _ := cmd.Flags().GetDuration("poll-interval")
 	pollOverride, err := resolveDaemonDurationOverride(pollFlag, "MULTICA_DAEMON_POLL_INTERVAL", fileCfg.PollInterval)
@@ -1819,6 +1829,17 @@ func resolveDaemonAgentTimeoutOverride(cmd *cobra.Command, envName string, cfgVa
 		return nil, fmt.Errorf("config value %q for %s must be >= 0", *cfgValue, envName)
 	}
 	return &parsed, nil
+}
+
+func codexSharedHomeFlag(cmd *cobra.Command) (*bool, error) {
+	if !cmd.Flags().Changed("codex-shared-home") {
+		return nil, nil
+	}
+	value, err := cmd.Flags().GetBool("codex-shared-home")
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
 }
 
 // resolveDaemonDisableSignal resolves a single-direction disable signal —

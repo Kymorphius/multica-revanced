@@ -119,6 +119,12 @@ type CLIConfig struct {
 	// DefaultCodexHandshakeTimeout.
 	CodexHandshakeTimeout string `json:"codex_handshake_timeout,omitempty"`
 
+	// CodexSharedHome opts Codex tasks into the user's shared data home.
+	// nil means unset; a non-nil false explicitly retains task isolation.
+	// Precedence: --codex-shared-home, MULTICA_CODEX_SHARED_HOME, this field,
+	// false. Empty `config set codex_shared_home ""` clears the preference.
+	CodexSharedHome *bool `json:"codex_shared_home,omitempty"`
+
 	// DisableAutoUpdate, when true, turns off the daemon's periodic CLI
 	// self-update poll. Only a single direction is persistable — the
 	// --no-auto-update flag is likewise one-way — because the env/default

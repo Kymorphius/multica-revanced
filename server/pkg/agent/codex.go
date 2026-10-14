@@ -25,8 +25,9 @@ import (
 
 // codexBlockedArgs are flags hardcoded by the daemon that must not be
 // overridden by user-configured custom_args. The mcp_servers config keys
-// live in the per-task `$CODEX_HOME/config.toml` (written by
-// ensureCodexMcpConfig); user-supplied `-c mcp_servers.…` overrides are
+// live in per-task config.toml (CODEX_HOME in isolated mode, the separate task
+// config home in shared mode), written by ensureCodexMcpConfig. User-supplied
+// `-c mcp_servers.…` overrides are
 // stripped separately by filterCodexCustomConfigOverrides because they
 // share the `-c` flag with legitimate non-MCP overrides like `-c model=…`.
 var codexBlockedArgs = map[string]blockedArgMode{
@@ -634,7 +635,7 @@ var userCodexMcpServersTableHeaderRe = regexp.MustCompile(
 	`^\s*\[\s*mcp_servers\s*\.\s*(?:"[^"]*"|[^\]\s]+)\s*\]\s*(?:#.*)?$`)
 
 // ensureCodexMcpConfig writes (or clears) the daemon-managed
-// `[mcp_servers.*]` block in `$CODEX_HOME/config.toml`. The block is the
+// `[mcp_servers.*]` block in the private task config.toml. The block is the
 // authoritative source of MCP servers for this run: with mcp_config set
 // in the agent UI the daemon also strips any inherited
 // `[mcp_servers.*]` tables from the per-task config so the user's global
@@ -1129,7 +1130,8 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	runCtx, cancel := runContext(ctx, timeout)
 
 	// Materialise the agent's MCP config into the per-task
-	// `$CODEX_HOME/config.toml`. Argv would be the simpler path, but
+	// config.toml (separate from CODEX_HOME in shared mode). Argv would be the
+	// simpler path, but
 	// `mcp_servers.<id>.env` is allowed to carry secrets (Codex docs:
 	// https://developers.openai.com/codex/mcp#configure-with-configtoml)
 	// and our UI already treats mcp_config as a redacted-for-non-admins
@@ -1138,8 +1140,17 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	// Writing through config.toml at 0o600 keeps the secret values out of argv
 	// entirely.
 	codexHome := strings.TrimSpace(b.cfg.Env["CODEX_HOME"])
-	if codexHome != "" {
-		if err := ensureCodexMcpConfig(filepath.Join(codexHome, "config.toml"), opts.McpConfig, b.cfg.Logger); err != nil {
+	sharedConfig, privateConfigHome, err := prepareCodexSharedConfig(b.cfg.Env)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	configHome := codexHome
+	if sharedConfig != nil {
+		configHome = privateConfigHome
+	}
+	if configHome != "" {
+		if err := ensureCodexMcpConfig(filepath.Join(configHome, "config.toml"), opts.McpConfig, b.cfg.Logger); err != nil {
 			// Fail closed when we can't materialise the managed config.
 			// Warning-and-launching would silently fall back to the
 			// user's global `~/.codex/config.toml` MCP servers and
@@ -1147,6 +1158,9 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 			// applied", which is exactly the surprise the MCP Tab is
 			// supposed to remove.
 			cancel()
+			if sharedConfig != nil {
+				return nil, fmt.Errorf("codex shared mode could not apply private mcp_config")
+			}
 			return nil, fmt.Errorf("apply codex mcp_config: %w", err)
 		}
 	} else if hasManagedCodexMcpConfig(opts.McpConfig) {
@@ -1156,6 +1170,13 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 		// shape of failure.
 		cancel()
 		return nil, fmt.Errorf("codex: mcp_config is set but CODEX_HOME env var is not configured; cannot apply managed MCP")
+	}
+	if sharedConfig != nil {
+		sharedConfig, err = readCodexSharedConfig(filepath.Join(configHome, "config.toml"))
+		if err != nil {
+			cancel()
+			return nil, err
+		}
 	}
 
 	// A custom runtime profile's fixed_args reach codex as the launch prefix.
@@ -1190,6 +1211,21 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 		})
 	}
 	codexArgs := buildCodexArgs(opts, b.cfg.Logger)
+	var sharedLaunchConfigKeys map[string]bool
+	if sharedConfig != nil {
+		sharedLaunchConfigKeys = make(map[string]bool)
+		// Prefix defaults precede daemon/agent arguments just as in native argv.
+		runtimeCmd.Prefix, err = applyCodexSharedLaunchOverrides(sharedConfig, runtimeCmd.Prefix, hasManagedCodexMcpConfig(opts.McpConfig), opts.ServiceTier == codexFastServiceTier, sharedLaunchConfigKeys)
+		if err == nil {
+			codexArgs, err = applyCodexSharedLaunchOverrides(sharedConfig, codexArgs, hasManagedCodexMcpConfig(opts.McpConfig), opts.ServiceTier == codexFastServiceTier, sharedLaunchConfigKeys)
+		}
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		applyCodexSharedFeatureFlags(sharedConfig, append(append([]string{}, runtimeCmd.Prefix...), codexArgs...))
+		sharedConfig["sqlite_home"] = codexHome
+	}
 	// Keep the app-server alive long enough to handle turn/interrupt when the
 	// task context is cancelled. The lifecycle goroutine remains governed by
 	// runCtx and explicitly stops this process context during bounded cleanup.
@@ -1223,7 +1259,16 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
-	cmd.Env = buildEnv(b.cfg.Env)
+	processEnv := b.cfg.Env
+	if sharedConfig != nil {
+		processEnv = make(map[string]string, len(b.cfg.Env)+1)
+		for key, value := range b.cfg.Env {
+			processEnv[key] = value
+		}
+		processEnv["CODEX_HOME"] = codexHome
+		processEnv["CODEX_SQLITE_HOME"] = codexHome
+	}
+	cmd.Env = buildEnv(processEnv)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1305,6 +1350,9 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	}
 
 	c = &codexClient{
+		sharedConfig:             sharedConfig,
+		sharedTaskConfigHome:     privateConfigHome,
+		sharedLaunchConfigKeys:   sharedLaunchConfigKeys,
 		cfg:                      b.cfg,
 		stdin:                    stdin,
 		pending:                  make(map[int]*pendingRPC),
@@ -2087,6 +2135,9 @@ func codexTurnInput(prompt string, resumeExpected, resumed bool, notice string) 
 // turn/start calls must reference, and resumed indicates whether the prior
 // thread was picked up (only useful for logging).
 func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions, logger *slog.Logger) (string, bool, error) {
+	if err := c.prepareSharedThreadConfig(ctx, opts); err != nil {
+		return "", false, err
+	}
 	if priorThreadID := opts.ResumeSessionID; priorThreadID != "" {
 		// thread/resume reuses the thread's persisted model and reasoning
 		// effort; only override fields the daemon actually cares about.
@@ -2100,6 +2151,18 @@ func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions,
 			// Only omit history from the response, not the resumed model context.
 			// We need the thread ID, not an unbounded single-line turns payload.
 			"excludeTurns": true,
+		}
+		if c.sharedConfig != nil {
+			resumeParams["config"] = c.sharedResumeConfig()
+			if c.sharedLaunchConfigKeys["model_provider"] {
+				provider, ok := c.sharedConfig["model_provider"].(string)
+				if !ok || strings.TrimSpace(provider) == "" {
+					return "", false, fmt.Errorf("codex shared mode explicit model_provider must be a nonempty string")
+				}
+				// Native resume recognizes the typed provider field when deciding
+				// whether persisted metadata may replace configuration defaults.
+				resumeParams["modelProvider"] = provider
+			}
 		}
 		// Explicit override of the persisted reasoning effort: without
 		// this, a Codex resume silently reuses whatever level the prior
@@ -2135,9 +2198,20 @@ func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions,
 				)
 				return threadID, true, nil
 			}
+			if c.sharedConfig != nil {
+				return "", false, fmt.Errorf("codex shared mode thread/resume returned no thread ID; resume outcome is uncertain")
+			}
 			logger.Warn("codex thread/resume returned no thread ID; falling back to thread/start", "prior_thread_id", priorThreadID)
 		} else {
-			if isCodexTransportError(err) {
+			transportFailure := isCodexTransportError(err)
+			if c.sharedConfig != nil {
+				missingThread := codexSharedResumeMayStartFresh(err, priorThreadID)
+				err = codexSharedRPCFailure("thread/resume", err)
+				if !missingThread {
+					return "", false, err
+				}
+			}
+			if transportFailure {
 				logger.Warn("codex thread/resume failed due to transport error; not falling back to thread/start", "prior_thread_id", priorThreadID, "error", err)
 				return "", false, fmt.Errorf("codex thread/resume failed: %w", err)
 			}
@@ -2166,6 +2240,9 @@ func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions,
 		"experimentalRawEvents":  false,
 		"persistExtendedHistory": true,
 	}
+	if c.sharedConfig != nil {
+		startParams["config"] = c.sharedConfig
+	}
 	applyCodexReasoningEffort(startParams, opts.ThinkingLevel)
 	applyCodexServiceTier(startParams, opts.ServiceTier)
 	c.threadSetupMethod = "thread/start"
@@ -2181,6 +2258,9 @@ func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions,
 	)
 	startResult, err := c.request(ctx, "thread/start", startParams)
 	if err != nil {
+		if c.sharedConfig != nil {
+			return "", false, codexSharedRPCFailure("thread/start", err)
+		}
 		return "", false, fmt.Errorf("codex thread/start failed: %w", err)
 	}
 	threadID := extractThreadID(startResult)
@@ -2454,6 +2534,9 @@ func describeCodexSemanticActivity(msg Message) string {
 
 type codexClient struct {
 	cfg                    Config
+	sharedConfig           map[string]any
+	sharedTaskConfigHome   string
+	sharedLaunchConfigKeys map[string]bool
 	stdin                  interface{ Write([]byte) (int, error) }
 	mu                     sync.Mutex
 	nextID                 int
@@ -2658,6 +2741,16 @@ type rpcResult struct {
 	err    error
 }
 
+type codexRPCError struct {
+	Method  string
+	Code    int
+	Message string
+}
+
+func (e *codexRPCError) Error() string {
+	return fmt.Sprintf("%s: %s (code=%d)", e.Method, e.Message, e.Code)
+}
+
 type codexHandshakeTimeoutError struct {
 	Method  string
 	Timeout time.Duration
@@ -2673,7 +2766,7 @@ func (e *codexHandshakeTimeoutError) Unwrap() error {
 
 func isCodexHandshakeRPC(method string) bool {
 	switch method {
-	case "initialize", "thread/start", "thread/resume", "thread/name/set", "turn/start":
+	case "initialize", "thread/start", "thread/resume", "thread/name/set", "turn/start", "config/read", "skills/extraRoots/set":
 		return true
 	default:
 		return false
@@ -2994,7 +3087,7 @@ func (c *codexClient) handleResponse(raw map[string]json.RawMessage) {
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(errData, &rpcErr)
-		pr.ch <- rpcResult{err: fmt.Errorf("%s: %s (code=%d)", pr.method, rpcErr.Message, rpcErr.Code)}
+		pr.ch <- rpcResult{err: &codexRPCError{Method: pr.method, Message: rpcErr.Message, Code: rpcErr.Code}}
 	} else {
 		pr.ch <- rpcResult{result: raw["result"]}
 	}

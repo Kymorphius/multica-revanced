@@ -46,6 +46,9 @@ var codexModelsCacheConfigFiles = []string{
 // CodexHomeOptions carries optional inputs for prepareCodexHomeWithOpts that
 // affect the generated per-task config.toml.
 type CodexHomeOptions struct {
+	// SharedHome opts this task into the canonical native data home while
+	// keeping its copied configuration and skills private.
+	SharedHome bool
 	// CodexVersion is the detected Codex CLI version (e.g. "0.121.0"). Empty
 	// means unknown; on macOS, unknown is treated as "probably broken" so the
 	// daemon falls back to danger-full-access for network access. See
@@ -197,6 +200,13 @@ func classifyPerTaskWindowsSandbox(configFile string, configSyncErr error, share
 // daemon-managed sandbox block picked by codexSandboxPolicyFor.
 func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *slog.Logger) error {
 	sharedHome := resolveSharedCodexHome()
+	if opts.SharedHome {
+		var err error
+		sharedHome, err = ResolveSharedCodexHome()
+		if err != nil {
+			return err
+		}
+	}
 	freshHome := false
 	if _, err := os.Lstat(codexHome); os.IsNotExist(err) {
 		freshHome = true
@@ -206,11 +216,21 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 		return fmt.Errorf("create codex-home dir: %w", err)
 	}
 
-	// Give the task its own local sessions/ directory instead of symlinking the
-	// shared ~/.codex/sessions in — a huge shared history would otherwise stall
-	// Codex's `initialize` state backfill (MUL-4424). See prepareCodexSessionsDir.
-	if err := prepareCodexSessionsDir(codexHome, sharedHome, opts, logger); err != nil {
-		logger.Warn("execenv: codex-home sessions dir prepare failed", "error", err)
+	if opts.SharedHome {
+		if err := prepareSharedCodexDataLinks(codexHome, sharedHome); err != nil {
+			return fmt.Errorf("prepare shared Codex data: %w", err)
+		}
+	} else {
+		if _, err := os.Lstat(filepath.Join(codexHome, codexSharedHomeMarker)); err == nil {
+			return fmt.Errorf("shared Codex task config home cannot be reused in isolated mode; prepare a fresh task home")
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect shared Codex task config marker: %w", err)
+		}
+		// Isolated tasks keep a scoped rollout store so initialize does not
+		// backfill the user's entire history (MUL-4424).
+		if err := prepareCodexSessionsDir(codexHome, sharedHome, opts, logger); err != nil {
+			logger.Warn("execenv: codex-home sessions dir prepare failed", "error", err)
+		}
 	}
 
 	// Symlink shared files (auth).
@@ -237,6 +257,9 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 		src := filepath.Join(sharedHome, name)
 		dst := filepath.Join(codexHome, name)
 		if err := syncCopiedFile(src, dst); err != nil {
+			if opts.SharedHome {
+				return fmt.Errorf("sync shared Codex task config %s: %w", name, err)
+			}
 			logger.Warn("execenv: codex-home sync failed", "file", name, "error", err)
 			if name == "config.toml" {
 				configSyncErr = err
@@ -311,7 +334,11 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 	// so cross-task and cross-workspace context leaks (multica#3130) cannot
 	// happen via `codex-home/memories/` or `~/.codex/memories/`. See
 	// codex_memory.go for the full rationale and escape hatch.
-	if err := ensureCodexMemoryConfig(filepath.Join(codexHome, "config.toml"), logger); err != nil {
+	if opts.SharedHome {
+		if err := stripManagedCodexMemoryConfig(configFile); err != nil {
+			return fmt.Errorf("restore shared Codex memory config: %w", err)
+		}
+	} else if err := ensureCodexMemoryConfig(configFile, logger); err != nil {
 		logger.Warn("execenv: codex-home ensure memory config failed", "error", err)
 	}
 
@@ -461,7 +488,20 @@ func PruneCodexSessionStores(profile string, retention time.Duration, now time.T
 	if retention <= 0 {
 		return 0, 0
 	}
-	root := filepath.Join(resolveSharedCodexHome(), codexSessionStoreRoot, codexSessionStoreNamespace(profile))
+	sharedHome, err := ResolveSharedCodexHome()
+	if err != nil {
+		return 0, 0
+	}
+	storeRoot := filepath.Join(sharedHome, codexSessionStoreRoot)
+	root := filepath.Join(storeRoot, codexSessionStoreNamespace(profile))
+	// Reservations use the configured spelling, as CodexSessionStorePath does.
+	// Physical paths below keep no-follow checks independent of home aliases.
+	reservationRoot := filepath.Join(resolveSharedCodexHome(), codexSessionStoreRoot, codexSessionStoreNamespace(profile))
+	// A copied task/store alias must never turn scoped GC into a traversal of
+	// the common sessions tree. Only the configured home itself may be an alias.
+	if !realCodexSessionStoreDirectory(storeRoot) || !realCodexSessionStoreDirectory(root) {
+		return 0, 0
+	}
 	agents, err := os.ReadDir(root)
 	if err != nil {
 		return 0, 0 // not created yet, or unreadable — nothing to prune
@@ -471,6 +511,9 @@ func PruneCodexSessionStores(profile string, retention time.Duration, now time.T
 			continue
 		}
 		agentDir := filepath.Join(root, a.Name())
+		if !realCodexSessionStoreDirectory(agentDir) {
+			continue
+		}
 		issues, err := os.ReadDir(agentDir)
 		if err != nil {
 			continue
@@ -481,6 +524,10 @@ func PruneCodexSessionStores(profile string, retention time.Duration, now time.T
 				continue
 			}
 			storeDir := filepath.Join(agentDir, is.Name())
+			if !realCodexSessionStoreDirectory(storeDir) {
+				kept++
+				continue
+			}
 			newest, size := dirStat(storeDir)
 			if newest.IsZero() || now.Sub(newest) <= retention {
 				kept++
@@ -491,12 +538,22 @@ func PruneCodexSessionStores(profile string, retention time.Duration, now time.T
 			// blocks any task from claiming it until the removal + commit finish.
 			var commit func()
 			if reserve != nil {
-				c, ok := reserve(storeDir)
+				c, ok := reserve(filepath.Join(reservationRoot, a.Name(), is.Name()))
 				if !ok {
 					kept++
 					continue
 				}
 				commit = c
+			}
+			// Recheck the complete scoped path after reservation, before the
+			// destructive operation. A repointed parent is never a prune target.
+			if !realCodexSessionStoreDirectory(storeRoot) || !realCodexSessionStoreDirectory(root) ||
+				!realCodexSessionStoreDirectory(agentDir) || !realCodexSessionStoreDirectory(storeDir) {
+				if commit != nil {
+					commit()
+				}
+				kept++
+				continue
 			}
 			err := os.RemoveAll(storeDir)
 			if commit != nil {
@@ -512,11 +569,16 @@ func PruneCodexSessionStores(profile string, retention time.Duration, now time.T
 		}
 		// Remove the agent dir once its last issue store is gone, so the tree
 		// does not leave empty <agent>/ shells behind.
-		if kept == 0 {
+		if kept == 0 && realCodexSessionStoreDirectory(storeRoot) && realCodexSessionStoreDirectory(root) && realCodexSessionStoreDirectory(agentDir) {
 			_ = os.Remove(agentDir)
 		}
 	}
 	return removed, bytesFreed
+}
+
+func realCodexSessionStoreDirectory(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
 }
 
 // dirStat walks dir once, returning the newest modification time seen (the

@@ -134,6 +134,10 @@ func ensureCodexDisabledSkillsConfig(configPath, codexHome string, disabled []Ru
 	if len(paths) == 0 {
 		return nil
 	}
+	return appendCodexDisabledSkillPaths(configPath, paths)
+}
+
+func appendCodexDisabledSkillPaths(configPath string, paths []string) error {
 	file, err := os.OpenFile(configPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err

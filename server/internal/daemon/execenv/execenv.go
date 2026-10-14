@@ -58,7 +58,10 @@ type PrepareParams struct {
 	Profile      string
 	Provider     string // agent provider (determines runtime config and skill injection paths)
 	CodexVersion string // detected Codex CLI version (only used when Provider == "codex")
-	OpenclawBin  string // resolved openclaw CLI path (only used when Provider == "openclaw"); empty = look up on PATH
+	// CodexSharedHome keeps native Codex data in the canonical home; task
+	// configuration and skills still use the private CodexHome overlay.
+	CodexSharedHome bool
+	OpenclawBin     string // resolved openclaw CLI path (only used when Provider == "openclaw"); empty = look up on PATH
 	// McpConfig is the agent's saved `mcp_config` JSON, forwarded to the
 	// provider-specific config preparer when that provider materialises MCP
 	// via a per-task config file. Cursor, OpenClaw, and OMP consume it here;
@@ -288,8 +291,12 @@ type Environment struct {
 	// agent exits to commit leftovers, drop the worktree, and learn the
 	// branch name to report as the task's result.
 	LocalWorktree *LocalWorktree
-	// CodexHome is the path to the per-task CODEX_HOME directory (set only for codex provider).
+	// CodexHome is the private task configuration/skills home for Codex. In
+	// isolated mode it also stores native data; shared mode uses CodexDataHome.
 	CodexHome string
+	// CodexDataHome is the physical native data home when shared mode is opted
+	// in. Empty keeps the existing isolated CODEX_HOME behavior.
+	CodexDataHome string
 	// ClaudeSettingsPath is a task-local --settings JSON file that applies
 	// disabled runtime-skill policy without mutating the user's Claude config.
 	ClaudeSettingsPath string
@@ -357,6 +364,9 @@ type RootDirParams struct {
 	WorkspaceSlug   string
 	TaskID          string
 	IssueIdentifier string
+	// CodexSharedHome prevents a same-task claim from resetting private native
+	// Codex data before shared preparation can require an explicit import.
+	CodexSharedHome bool
 }
 
 // Keep each readable segment within the same aggregate budget as main's
@@ -479,6 +489,11 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		// clean tree. Reuse of a PRIOR task's directory never reaches here;
 		// that is Reuse, which takes an explicit WorkDir and deletes nothing.
 		if reset {
+			if params.Provider == "codex" && params.CodexSharedHome {
+				if err := ValidateSharedCodexTaskHome(filepath.Join(envRoot, codexHomeDirName)); err != nil {
+					return nil, fmt.Errorf("execenv: preserve private Codex data before reset: %w", err)
+				}
+			}
 			if err := resetEnvRootContents(envRoot); err != nil {
 				return nil, fmt.Errorf("execenv: reset existing env: %w", err)
 			}
@@ -629,13 +644,20 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	// For Codex, set up a per-task CODEX_HOME seeded from ~/.codex/ with skills.
 	if params.Provider == "codex" {
 		codexHome := filepath.Join(envRoot, codexHomeDirName)
-		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion, IsLocalDirectory: params.LocalWorkDir != "" || params.LocalWorktree != nil, SessionStoreKey: codexSessionStoreKey(params.Profile, params.Task), CodexCustomArgs: params.CodexCustomArgs}, logger); err != nil {
+		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{SharedHome: params.CodexSharedHome, CodexVersion: params.CodexVersion, IsLocalDirectory: params.LocalWorkDir != "" || params.LocalWorktree != nil, SessionStoreKey: codexSessionStoreKey(params.Profile, params.Task), CodexCustomArgs: params.CodexCustomArgs}, logger); err != nil {
 			return nil, fmt.Errorf("execenv: prepare codex-home: %w", err)
 		}
-		if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.Task.DisabledRuntimeSkills, logger); err != nil {
+		env.CodexHome = codexHome
+		if params.CodexSharedHome {
+			var err error
+			env.CodexDataHome, err = ResolveSharedCodexHome()
+			if err != nil {
+				return nil, fmt.Errorf("execenv: resolve shared Codex data home: %w", err)
+			}
+		}
+		if err := hydrateCodexSkillsWithSharedHome(codexHome, env.CodexDataHome, params.Task.AgentSkills, params.Task.DisabledRuntimeSkills, logger); err != nil {
 			return nil, fmt.Errorf("execenv: hydrate codex skills: %w", err)
 		}
-		env.CodexHome = codexHome
 	}
 
 	if params.Provider == "claude" {
@@ -753,6 +775,8 @@ type ReuseParams struct {
 	WorkDir        string
 	Provider       string
 	CodexVersion   string // only used when Provider == "codex"
+	// CodexSharedHome mirrors PrepareParams on reused configuration overlays.
+	CodexSharedHome bool
 	// ResumeSessionID is the prior Codex thread/session ID this reused task
 	// intends to resume, when any. Only consulted when Provider == "codex" and
 	// only used while migrating a legacy per-task home whose sessions/ still
@@ -911,7 +935,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// config (especially sandbox/network access) is up to date.
 	if params.Provider == "codex" {
 		codexHome := filepath.Join(env.RootDir, codexHomeDirName)
-		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion, ResumeSessionID: params.ResumeSessionID, IsLocalDirectory: params.LocalDirectory, SessionStoreKey: codexSessionStoreKey(params.Profile, params.Task), CodexCustomArgs: params.CodexCustomArgs}, logger); err != nil {
+		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{SharedHome: params.CodexSharedHome, CodexVersion: params.CodexVersion, ResumeSessionID: params.ResumeSessionID, IsLocalDirectory: params.LocalDirectory, SessionStoreKey: codexSessionStoreKey(params.Profile, params.Task), CodexCustomArgs: params.CodexCustomArgs}, logger); err != nil {
 			// Leaving env.CodexHome empty does not launch Codex against an
 			// ambient home: configureCodexTaskShellEnvironment rejects the empty
 			// value ("task CODEX_HOME is missing") and the run fails before
@@ -923,8 +947,19 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 			return nil
 		} else {
 			env.CodexHome = codexHome
-			if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.Task.DisabledRuntimeSkills, logger); err != nil {
+			if params.CodexSharedHome {
+				var err error
+				env.CodexDataHome, err = ResolveSharedCodexHome()
+				if err != nil {
+					logger.Warn("execenv: resolve shared Codex data home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
+			}
+			if err := hydrateCodexSkillsWithSharedHome(codexHome, env.CodexDataHome, params.Task.AgentSkills, params.Task.DisabledRuntimeSkills, logger); err != nil {
 				logger.Warn("execenv: refresh codex skills failed", "error", err)
+				if params.CodexSharedHome {
+					return nil
+				}
 			}
 		}
 	}
@@ -1058,6 +1093,10 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 // user-level skills natively (see context.go for the workdir-local paths
 // they use for workspace skills).
 func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, disabledRuntimeSkills []RuntimeSkillRefForEnv, logger *slog.Logger) error {
+	return hydrateCodexSkillsWithSharedHome(codexHome, "", workspaceSkills, disabledRuntimeSkills, logger)
+}
+
+func hydrateCodexSkillsWithSharedHome(codexHome, sharedHome string, workspaceSkills []SkillContextForEnv, disabledRuntimeSkills []RuntimeSkillRefForEnv, logger *slog.Logger) error {
 	skillsDir := filepath.Join(codexHome, "skills")
 	if err := os.RemoveAll(skillsDir); err != nil {
 		return fmt.Errorf("clear codex skills dir: %w", err)
@@ -1069,6 +1108,9 @@ func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, 
 		if err := writeSkillFiles(skillsDir, workspaceSkills, nil); err != nil {
 			return err
 		}
+	}
+	if err := ensureSharedWorkspaceSkillOverrides(filepath.Join(codexHome, "config.toml"), sharedHome, workspaceSkills); err != nil {
+		return err
 	}
 	return ensureCodexDisabledSkillsConfig(filepath.Join(codexHome, "config.toml"), codexHome, disabledRuntimeSkills, workspaceSkills)
 }
@@ -1312,6 +1354,12 @@ func ClaimEnvRoot(params RootDirParams) (*EnvRootClaim, error) {
 		return nil, fmt.Errorf("execenv: %w", err)
 	}
 	if reset {
+		if params.CodexSharedHome {
+			if err := ValidateSharedCodexTaskHome(filepath.Join(envRoot, codexHomeDirName)); err != nil {
+				releaseLockFile(lock)
+				return nil, fmt.Errorf("execenv: preserve private Codex data before reset: %w", err)
+			}
+		}
 		if err := resetEnvRootContents(envRoot); err != nil {
 			releaseLockFile(lock)
 			return nil, fmt.Errorf("execenv: reset existing env: %w", err)

@@ -76,6 +76,7 @@ func TestRunConfigShowIncludesProfileAndDefaults(t *testing.T) {
 		"agent_timeout:",
 		"codex_semantic_inactivity_timeout:",
 		"codex_handshake_timeout:",
+		"codex_shared_home:",
 		"disable_auto_update:",
 		"auto_update_check_interval:",
 		"disable_auto_reload:",

@@ -7497,14 +7497,26 @@ func (d *Daemon) prepareExecutionEnvironment(ctx context.Context, params execenv
 }
 
 func (d *Daemon) reuseExecutionEnvironment(ctx context.Context, params execenv.ReuseParams) (*execenv.Environment, error) {
+	if params.Provider == "codex" && params.CodexSharedHome {
+		if err := execenv.ValidateSharedCodexTaskHome(filepath.Join(filepath.Dir(params.WorkDir), "codex-home")); err != nil {
+			return nil, fmt.Errorf("shared Codex reuse requires prior native data import: %w", err)
+		}
+	}
+	var env *execenv.Environment
+	var err error
 	if d.executionEnvironmentCommand == nil {
-		return execenv.Reuse(params, d.logger), nil
+		env = execenv.Reuse(params, d.logger)
+	} else {
+		command, commandErr := d.executionEnvironmentCommand()
+		if commandErr != nil {
+			return nil, commandErr
+		}
+		env, err = execenv.ReuseIsolated(ctx, command, params, d.logger)
 	}
-	command, err := d.executionEnvironmentCommand()
-	if err != nil {
-		return nil, err
+	if err == nil && env == nil && params.Provider == "codex" && params.CodexSharedHome {
+		return nil, errors.New("shared Codex reuse was refused; inspect or import the prior private native data before retrying")
 	}
-	return execenv.ReuseIsolated(ctx, command, params, d.logger)
+	return env, err
 }
 
 func (d *Daemon) effectiveTaskPrepareTimeout() time.Duration {
@@ -7933,7 +7945,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// *os.File cannot cross its JSON response back to us. Claiming there would
 	// leave the agent running with no protection at all — which is exactly the
 	// re-dispatch window this guards.
-	envClaim, err := execenv.ClaimEnvRoot(taskRootDirParams(d.cfg.WorkspacesRoot, task))
+	claimParams := taskRootDirParams(d.cfg.WorkspacesRoot, task)
+	claimParams.CodexSharedHome = provider == "codex" && d.cfg.CodexSharedHome
+	envClaim, err := execenv.ClaimEnvRoot(claimParams)
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("claim execution environment: %w", err)
 	}
@@ -8175,6 +8189,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			WorkDir:               priorWorkDir,
 			Provider:              provider,
 			CodexVersion:          codexVersion,
+			CodexSharedHome:       d.cfg.CodexSharedHome,
 			ResumeSessionID:       task.PriorSessionID,
 			OpenclawBin:           openclawBin,
 			McpConfig:             effectiveMcpConfig,
@@ -8226,6 +8241,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			EnvRootPreclaimed:     true,
 			Provider:              provider,
 			CodexVersion:          codexVersion,
+			CodexSharedHome:       d.cfg.CodexSharedHome,
 			OpenclawBin:           openclawBin,
 			McpConfig:             effectiveMcpConfig,
 			CursorMcpAuthSource:   cursorMcpAuthSource,
@@ -8583,11 +8599,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		binDir := filepath.Dir(selfBin)
 		agentEnv["PATH"] = binDir + string(os.PathListSeparator) + os.Getenv("PATH")
 	}
-	// Point Codex to the per-task CODEX_HOME so it discovers skills natively
-	// without polluting the system ~/.codex/skills/.
-	if env.CodexHome != "" {
-		agentEnv["CODEX_HOME"] = env.CodexHome
-	}
 	// HOME and the XDG base dirs are deliberately not touched here: provider
 	// tools such as gh, aws, kubectl, and npm continue resolving the daemon
 	// user's existing state (MUL-5578). The Multica CLI is the exception:
@@ -8629,6 +8640,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentCustomEnv = task.Agent.CustomEnv
 	}
 	layerCustomEnvAndHermesHome(agentEnv, agentCustomEnv, env.HermesHome, d.logger)
+	if err := configureCodexDataEnvironment(provider, env, agentEnv); err != nil {
+		return TaskResult{}, err
+	}
 	if provider == "reasonix" {
 		reasonixStateHome, err := prepareReasonixTaskStateHome(d.cfg.Profile, task.RuntimeID, task.AgentID)
 		if err != nil {
@@ -10454,7 +10468,7 @@ func isBlockedEnvKey(key string) bool {
 		return true
 	}
 	switch upper {
-	case "HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "CODEX_HOME", "REASONIX_STATE_HOME", "CURSOR_DATA_DIR", execenv.CursorMcpAuthSourceEnv, "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS":
+	case "HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "CODEX_HOME", "CODEX_SQLITE_HOME", "MULTICA_CODEX_TASK_CONFIG_HOME", "REASONIX_STATE_HOME", "CURSOR_DATA_DIR", execenv.CursorMcpAuthSourceEnv, "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS":
 		return true
 	}
 	return false

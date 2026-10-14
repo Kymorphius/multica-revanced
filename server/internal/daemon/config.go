@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,6 +145,7 @@ type Config struct {
 	// for app-servers that are legitimately slow to their first event (GH #3262).
 	CodexFirstTurnNoProgressTimeout time.Duration
 	CodexHandshakeTimeout           time.Duration
+	CodexSharedHome                 bool // opt into a common user Codex data home; false keeps task isolation
 	// CodexTurnInterruptTimeout is the bounded grace period after cancellation
 	// for app-server to acknowledge turn/interrupt and emit turn/completed.
 	// Operators can tune it with MULTICA_CODEX_TURN_INTERRUPT_TIMEOUT using the
@@ -181,12 +183,14 @@ type Overrides struct {
 	AgentTimeout                   *time.Duration
 	CodexSemanticInactivityTimeout time.Duration
 	CodexHandshakeTimeout          time.Duration
-	MaxConcurrentTasks             int
-	DaemonID                       string
-	DeviceName                     string
-	RuntimeName                    string
-	Profile                        string // profile name (empty = default)
-	HealthPort                     int    // health check port (0 = use default)
+	// CodexSharedHome distinguishes an explicit false flag from an unset flag.
+	CodexSharedHome    *bool
+	MaxConcurrentTasks int
+	DaemonID           string
+	DeviceName         string
+	RuntimeName        string
+	Profile            string // profile name (empty = default)
+	HealthPort         int    // health check port (0 = use default)
 	// AllowNoAgents is reserved for read-only local configuration probes. Daemon
 	// startup keeps the default false and still refuses to run with no agent CLI.
 	AllowNoAgents bool
@@ -241,10 +245,12 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// purely from env-var configuration. We log a warning and proceed with
 	// no overrides.
 	var profileCommandOverrides map[string]string
+	var persistedCodexSharedHome *bool
 	if cliCfg, err := cli.LoadCLIConfigForProfile(overrides.Profile); err != nil {
 		slog.Warn("could not load CLI config for backend overrides; proceeding without",
 			"profile", overrides.Profile, "err", err)
 	} else {
+		persistedCodexSharedHome = cliCfg.CodexSharedHome
 		if oc := openclawOverrideFrom(cliCfg); oc != nil {
 			applyOpenclawOverride(oc)
 		}
@@ -260,6 +266,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 				profileCommandOverrides[id] = path
 			}
 		}
+	}
+
+	codexSharedHome, err := resolveCodexSharedHome(overrides.CodexSharedHome, persistedCodexSharedHome)
+	if err != nil {
+		return Config{}, err
 	}
 
 	// Discover installed agent CLIs. Extracted so the periodic workspace sync
@@ -658,6 +669,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		CodexSemanticInactivityTimeout:  codexSemanticInactivityTimeout,
 		CodexFirstTurnNoProgressTimeout: codexFirstTurnNoProgressTimeout,
 		CodexHandshakeTimeout:           codexHandshakeTimeout,
+		CodexSharedHome:                 codexSharedHome,
 		CodexTurnInterruptTimeout:       codexTurnInterruptTimeout,
 		CodexThreadHandshakeTimeout:     codexThreadHandshakeTimeout,
 		OpenCodeIdleWatchdog:            openCodeIdleWatchdog,
@@ -670,6 +682,23 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		QwenpawArgs:                     qwenpawArgs,
 		ProfileCommandOverrides:         profileCommandOverrides,
 	}, nil
+}
+
+func resolveCodexSharedHome(override, persisted *bool) (bool, error) {
+	if override != nil {
+		return *override, nil
+	}
+	if raw, set := os.LookupEnv("MULTICA_CODEX_SHARED_HOME"); set {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return false, fmt.Errorf("MULTICA_CODEX_SHARED_HOME must be 'true' or 'false' (got %q)", raw)
+		}
+		return value, nil
+	}
+	if persisted != nil {
+		return *persisted, nil
+	}
+	return false, nil
 }
 
 // officialCloudHost is the hostname of Multica's hosted cloud. It's the only

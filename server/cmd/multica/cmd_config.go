@@ -42,6 +42,7 @@ var configSetSupportedKeys = []string{
 	"agent_timeout",
 	"codex_semantic_inactivity_timeout",
 	"codex_handshake_timeout",
+	"codex_shared_home",
 	"disable_auto_update",
 	"auto_update_check_interval",
 	"disable_auto_reload",
@@ -54,11 +55,11 @@ var configSetCmd = &cobra.Command{
 		"server_url, app_url, workspace_id, " +
 		"device_name, runtime_name, workspaces_root, max_concurrent_tasks, poll_interval, ws_claim_poll_interval, " +
 		"heartbeat_interval, agent_timeout, " +
-		"codex_semantic_inactivity_timeout, codex_handshake_timeout, " +
+		"codex_semantic_inactivity_timeout, codex_handshake_timeout, codex_shared_home, " +
 		"disable_auto_update, auto_update_check_interval, disable_auto_reload.\n\n" +
 		"The daemon keys (device_name, runtime_name, workspaces_root, max_concurrent_tasks, " +
 		"poll_interval, ws_claim_poll_interval, heartbeat_interval, agent_timeout, " +
-		"codex_semantic_inactivity_timeout, codex_handshake_timeout, " +
+		"codex_semantic_inactivity_timeout, codex_handshake_timeout, codex_shared_home, " +
 		"disable_auto_update, auto_update_check_interval, disable_auto_reload) mirror their " +
 		"--flag / env counterparts and are read by `daemon start` when " +
 		"neither the flag nor the env var is set. " +
@@ -66,6 +67,7 @@ var configSetCmd = &cobra.Command{
 		"Duration keys take a positive Go duration (e.g. '10s', '500ms', '1m30s'); " +
 		"'0s' and negative values are rejected — except agent_timeout, where " +
 		"'0s' is meaningful and explicitly disables the wall-clock cap. " +
+		"codex_shared_home takes 'true' or 'false'; 'false' explicitly keeps task isolation. " +
 		"disable_auto_update and disable_auto_reload take 'true' or 'false' " +
 		"(single-direction: setting one to 'true' turns that behavior off, " +
 		"'false' clears the override so env/default decides). Pass an empty " +
@@ -108,6 +110,7 @@ func runConfigShow(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "agent_timeout:", agentTimeoutDisplay(cfg.AgentTimeout))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "codex_semantic_inactivity_timeout:", valueOrDefault(cfg.CodexSemanticInactivityTimeout, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "codex_handshake_timeout:", valueOrDefault(cfg.CodexHandshakeTimeout, "(not set)"))
+	fmt.Fprintf(os.Stdout, "%-34s %s\n", "codex_shared_home:", optionalBoolDisplay(cfg.CodexSharedHome))
 	fmt.Fprintf(os.Stdout, "%-34s %t\n", "disable_auto_update:", cfg.DisableAutoUpdate)
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "auto_update_check_interval:", valueOrDefault(cfg.AutoUpdateCheckInterval, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %t\n", "disable_auto_reload:", cfg.DisableAutoReload)
@@ -242,6 +245,16 @@ func applyConfigSet(cfg *cli.CLIConfig, key, value string) error {
 		if err := assignPositiveDuration(&cfg.CodexHandshakeTimeout, key, value); err != nil {
 			return err
 		}
+	case "codex_shared_home":
+		if value == "" {
+			cfg.CodexSharedHome = nil
+			break
+		}
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s must be 'true' or 'false' (got %q)", key, value)
+		}
+		cfg.CodexSharedHome = &parsed
 	case "disable_auto_update":
 		if err := assignBool(&cfg.DisableAutoUpdate, key, value); err != nil {
 			return err
@@ -311,6 +324,13 @@ func agentTimeoutDisplay(v *string) string {
 		return *v + " (disabled)"
 	}
 	return *v
+}
+
+func optionalBoolDisplay(v *bool) string {
+	if v == nil {
+		return "(not set)"
+	}
+	return strconv.FormatBool(*v)
 }
 
 func valueOrDefault(v, fallback string) string {
