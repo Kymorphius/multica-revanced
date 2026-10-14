@@ -6594,7 +6594,9 @@ func providerNeedsInlineSystemPrompt(provider string) bool {
 // store must still drop the resume, even when the cwd matches (#6806).
 // Codex also has a conversation-scoped store for local_directory tasks. A
 // continued worktree may use a new cwd while retaining its branch and rollout.
-// Managed Codex tasks still require the same existing directory.
+// Shared native Codex data is also independent of cwd; the subsequent rollout
+// presence gate still proves the exact native session is reachable. Isolated
+// managed Codex tasks require the same existing directory.
 // sameExistingDir reports whether two paths name the same existing directory.
 // False when either cannot be stat'd, which is the safe answer for cwd-keyed
 // providers: an absent prior workdir means there is nothing to resume from.
@@ -6621,13 +6623,13 @@ func codexWorktreeResumeEligible(env *execenv.Environment, store string) bool {
 	return env != nil && env.LocalWorktree != nil && env.LocalWorktree.Continued && env.CodexHome != "" && store != ""
 }
 
-func gateResumeToReachableSession(task *Task, taskCtx *execenv.TaskContextForEnv, provider, envWorkDir string, sessionHomeReachable, refusesMissingSessionCwd, codexWorktreeResumeEligible bool, taskLog *slog.Logger) bool {
+func gateResumeToReachableSession(task *Task, taskCtx *execenv.TaskContextForEnv, provider, envWorkDir string, sessionHomeReachable, refusesMissingSessionCwd, codexNativeResumeIndependentCwd bool, taskLog *slog.Logger) bool {
 	var reachable bool
 	if providerUsesPiSessionFile(provider) {
 		reachable = piSessionResumable(task.PriorSessionID, refusesMissingSessionCwd)
 	} else if provider == "hermes" {
 		reachable = sessionHomeReachable
-	} else if provider == "codex" && codexWorktreeResumeEligible {
+	} else if provider == "codex" && codexNativeResumeIndependentCwd {
 		reachable = sessionHomeReachable
 	} else {
 		// Compare the directories, not the spelling. Reuse runs in the canonical
@@ -7936,6 +7938,45 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 	}
 
+	localAssignment, _ := localDirectoryAssignmentForTask(task, d.cfg.DaemonID)
+	var priorClaim *execenv.EnvRootClaim
+	var priorWorkDir string
+	var lockedPriorInfo os.FileInfo
+	var reusable bool
+	var reuseErr error
+	priorReuseChecked := false
+	defer func() { priorClaim.Release() }()
+	codexSharedHome := d.cfg.CodexSharedHome
+	resolvedCodexPriorSessionID := ""
+	if provider == "codex" && task.PriorSessionID != "" {
+		// Resolve the existing native conversation under the store writer lock.
+		// Managed evidence is admitted only while its validated root is claimed;
+		// local-directory tasks use their scoped store instead of the user cwd.
+		priorClaim, priorWorkDir, lockedPriorInfo, reusable, reuseErr = d.lockReusablePriorEnvRoot(ctx, task, localAssignment, "")
+		if reuseErr != nil {
+			return TaskResult{}, reuseErr
+		}
+		priorReuseChecked = true
+		managedHome := ""
+		if localAssignment == nil {
+			if reusable {
+				managedHome = filepath.Join(filepath.Dir(priorWorkDir), "codex-home")
+			}
+		}
+		var err error
+		codexSharedHome, err = execenv.ResolveCodexConversationSharedHome(execenv.CodexConversationHomeParams{
+			SharedHomeDefault: codexSharedHome, Profile: d.cfg.Profile, Task: taskCtx,
+			PriorSessionID: task.PriorSessionID, PriorManagedHome: managedHome,
+		})
+		if err != nil {
+			return TaskResult{}, asEnvironmentSetupFailure(fmt.Errorf("resolve prior Codex native home: %w", err))
+		}
+		resolvedCodexPriorSessionID = task.PriorSessionID
+		if localAssignment == nil && !reusable && !codexSharedHome {
+			return TaskResult{}, asEnvironmentSetupFailure(errors.New("prior isolated Codex managed environment is unavailable; refusing to replace its conversation"))
+		}
+	}
+
 	// Claim the env root HERE, in the daemon parent, and hold it for the whole
 	// task run — the same lifetime as unmarkActiveEnvRoot above.
 	//
@@ -7946,10 +7987,17 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// leave the agent running with no protection at all — which is exactly the
 	// re-dispatch window this guards.
 	claimParams := taskRootDirParams(d.cfg.WorkspacesRoot, task)
-	claimParams.CodexSharedHome = provider == "codex" && d.cfg.CodexSharedHome
-	envClaim, err := execenv.ClaimEnvRoot(claimParams)
-	if err != nil {
-		return TaskResult{}, fmt.Errorf("claim execution environment: %w", err)
+	claimParams.CodexSharedHome = provider == "codex" && codexSharedHome
+	var envClaim *execenv.EnvRootClaim
+	if priorReuseChecked && reusable && sameExistingDir(filepath.Dir(priorWorkDir), resolvedRoot) {
+		// A re-dispatched native continuation already owns this root through its
+		// reuse claim. Resetting it would erase the isolated conversation.
+		envClaim = priorClaim
+	} else {
+		envClaim, err = execenv.ClaimEnvRoot(claimParams)
+		if err != nil {
+			return TaskResult{}, fmt.Errorf("claim execution environment: %w", err)
+		}
 	}
 	defer envClaim.Release()
 
@@ -7972,7 +8020,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Resolve any local_directory assignment again here so runTask can plumb
 	// LocalWorkDir into execenv. handleTask already validated + locked the
 	// path for worker tasks; leader tasks intentionally skip the assignment.
-	localAssignment, _ := localDirectoryAssignmentForTask(task, d.cfg.DaemonID)
 	// Reuse intentionally skipped for local_directory tasks: the prior
 	// WorkDir is the user's own path (always present) but the reuse path
 	// loses the envRoot association the GC loop needs, and re-running
@@ -8163,7 +8210,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		reasonixEnv = sanitizeAgentEnv(agentEnvOverrides)
 	}
 	envReused := false
-	priorClaim, priorWorkDir, lockedPriorInfo, reusable, reuseErr := d.lockReusablePriorEnvRoot(ctx, task, localAssignment, envClaim.RootDir())
+	if !priorReuseChecked {
+		priorClaim, priorWorkDir, lockedPriorInfo, reusable, reuseErr = d.lockReusablePriorEnvRoot(ctx, task, localAssignment, envClaim.RootDir())
+	}
 	if reuseErr != nil {
 		// Cancelled while waiting for the previous run to let go of its
 		// directory. Ending here IS the behaviour: falling through would
@@ -8172,7 +8221,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, reuseErr
 	}
 	if reusable {
-		defer priorClaim.Release()
 		// Deterministic seam for the last-window regression: tests swap the
 		// directory here, after the claim is settled and before Reuse resolves
 		// the path by name.
@@ -8189,7 +8237,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			WorkDir:               priorWorkDir,
 			Provider:              provider,
 			CodexVersion:          codexVersion,
-			CodexSharedHome:       d.cfg.CodexSharedHome,
+			CodexSharedHome:       codexSharedHome,
 			ResumeSessionID:       task.PriorSessionID,
 			OpenclawBin:           openclawBin,
 			McpConfig:             effectiveMcpConfig,
@@ -8225,6 +8273,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// Whether it did decides whether an env-root-scoped session store — the
 		// Hermes overlay's task-local state.db — carried over from the prior task.
 		envReused = env != nil
+		if env == nil && provider == "codex" && task.PriorSessionID != "" {
+			return TaskResult{}, asEnvironmentSetupFailure(errors.New("prior Codex environment reuse was refused; refusing to replace its conversation"))
+		}
 	}
 	if env == nil {
 		var err error
@@ -8241,7 +8292,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			EnvRootPreclaimed:     true,
 			Provider:              provider,
 			CodexVersion:          codexVersion,
-			CodexSharedHome:       d.cfg.CodexSharedHome,
+			CodexSharedHome:       codexSharedHome,
 			OpenclawBin:           openclawBin,
 			McpConfig:             effectiveMcpConfig,
 			CursorMcpAuthSource:   cursorMcpAuthSource,
@@ -8520,7 +8571,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		&task, &taskCtx, provider, env.WorkDir,
 		sessionHomeReachable(provider, env, envReused),
 		providerRefusesMissingSessionCwd(provider, !usesCustomProfileCommand),
-		provider == "codex" && codexWorktreeResumeEligible(env, execenv.CodexSessionStorePath(d.cfg.Profile, taskCtx)),
+		provider == "codex" && (env.CodexDataHome != "" || codexWorktreeResumeEligible(env, execenv.CodexSessionStorePath(d.cfg.Profile, taskCtx))),
 		taskLog,
 	)
 	// A reachable workdir or continued local worktree is not sufficient for a
@@ -8530,6 +8581,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// conversation Codex will silently restart from scratch.
 	if resumeReachable {
 		gateCodexResumeToRolloutPresence(&task, &taskCtx, provider, env.CodexHome, taskLog)
+	}
+	if resolvedCodexPriorSessionID != "" && task.PriorSessionID != resolvedCodexPriorSessionID {
+		return TaskResult{}, asEnvironmentSetupFailure(errors.New("resolved prior Codex native session became unreachable during preparation; refusing to replace its conversation"))
 	}
 
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.

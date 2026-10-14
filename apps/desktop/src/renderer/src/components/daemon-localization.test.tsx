@@ -23,6 +23,12 @@ function installDaemonAPI(status: DaemonStatus) {
     value: {
       getPrefs: vi.fn().mockResolvedValue({ autoStart: true, autoStop: false }),
       setPrefs: vi.fn().mockResolvedValue({ autoStart: true, autoStop: false }),
+      getCodexSettings: vi.fn().mockResolvedValue({
+        savedSharedHome: false,
+        editable: !status.externallyManaged,
+        environmentOverride: false,
+      }),
+      setCodexSharedHome: vi.fn(),
       isCliInstalled: vi.fn().mockResolvedValue(true),
       getStatus: vi.fn().mockResolvedValue(status),
       onStatusChange: vi.fn(() => () => {}),

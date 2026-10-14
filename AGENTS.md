@@ -122,7 +122,7 @@ Workspace-scoped queries filter by `workspace_id`; membership gates access and `
 ## Change and Delivery Rules
 
 - Keep changes scoped; reuse existing patterns. Code comments are English.
-- Codex shared-state mode is an explicit personal-profile opt-in. Keep task MCP and skill configuration private, share native data and thread locks consistently, and never let task cleanup or session-store GC follow links into the shared home. See [shared-codex-home.md](docs/engineering/shared-codex-home.md).
+- Codex shared-state mode is an explicit personal-profile opt-in for new native conversations. Preserve the storage mode of existing conversations across preference changes. Keep task MCP and skill configuration private, share native data and thread locks consistently, and never let task cleanup or session-store GC follow links into the shared home. See [shared-codex-home.md](docs/engineering/shared-codex-home.md).
 - Do not add internal compatibility shims, dual writes, fallback paths, or legacy adapters unless requested. This does not relax API response compatibility above.
 - New global pre-workspace routes use a single word or `/{noun}/{verb}`, not hyphenated root names. Update `server/internal/handler/reserved_slugs.json`, run `pnpm generate:reserved-slugs`, and commit `packages/core/paths/reserved-slugs.ts` when changing reserved slugs.
 - Use atomic conventional commits and the repository PR template. For releases, follow [.github/RELEASING.md](.github/RELEASING.md); default to a patch bump unless specified otherwise.

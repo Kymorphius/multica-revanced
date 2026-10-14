@@ -48,6 +48,11 @@ type HealthResponse struct {
 	// CLICommit belongs to this running process, not an installed replacement.
 	// Empty or unknown values do not attest a revision; never fall back to version.
 	CLICommit string `json:"cli_commit"`
+	// Codex configuration identifies the shared data mode and the executable
+	// from the current availability snapshot, not a profile's lower-priority pin.
+	CodexSharedHome bool   `json:"codex_shared_home"`
+	CodexHome       string `json:"codex_home,omitempty"`
+	CodexPath       string `json:"codex_path,omitempty"`
 	// LaunchedBy is "desktop" when the Electron app spawned this daemon, empty
 	// for a standalone one. Already reported to the server on registration;
 	// surfaced here so `daemon status` can say who manages the daemon instead
@@ -328,8 +333,9 @@ func (d *Daemon) healthHandler(startedAt time.Time) http.HandlerFunc {
 		}
 		d.mu.Unlock()
 
-		agents := make([]string, 0, len(d.agents()))
-		for name := range d.agents() {
+		availableAgents := d.agents()
+		agents := make([]string, 0, len(availableAgents))
+		for name := range availableAgents {
 			agents = append(agents, name)
 		}
 
@@ -356,6 +362,8 @@ func (d *Daemon) healthHandler(startedAt time.Time) http.HandlerFunc {
 			ServerURL:             d.cfg.ServerBaseURL,
 			CLIVersion:            d.cfg.CLIVersion,
 			CLICommit:             d.cfg.CLICommit,
+			CodexSharedHome:       d.cfg.CodexSharedHome,
+			CodexPath:             availableAgents["codex"].Path,
 			ActiveTaskCount:       d.activeTasks.Load(),
 			RunningTaskCount:      d.runningTasks.Load(),
 			ResourceWaitTaskCount: d.resourceWaitTasks.Load(),
@@ -364,6 +372,9 @@ func (d *Daemon) healthHandler(startedAt time.Time) http.HandlerFunc {
 
 			ReloadPendingReason: d.reloadPending(),
 			Workspaces:          wsList,
+		}
+		if d.cfg.CodexSharedHome {
+			resp.CodexHome = d.cfg.CodexHome
 		}
 		if reporter, ok := d.repoCache.(interface{ Activity() repocache.Activity }); ok {
 			activity := reporter.Activity()

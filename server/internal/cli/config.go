@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -124,6 +125,10 @@ type CLIConfig struct {
 	// Precedence: --codex-shared-home, MULTICA_CODEX_SHARED_HOME, this field,
 	// false. Empty `config set codex_shared_home ""` clears the preference.
 	CodexSharedHome *bool `json:"codex_shared_home,omitempty"`
+
+	// CodexPath pins an absolute executable for this personal daemon profile.
+	// MULTICA_CODEX_PATH takes precedence; empty retains normal discovery.
+	CodexPath string `json:"codex_path,omitempty"`
 
 	// DisableAutoUpdate, when true, turns off the daemon's periodic CLI
 	// self-update poll. Only a single direction is persistable — the
@@ -306,6 +311,21 @@ func validateTaskLocalProfile(profile string) error {
 		return fmt.Errorf("invalid task-local Multica profile name %q", profile)
 	}
 	return nil
+}
+
+// ValidateCodexPath checks a profile pin without executing the candidate.
+func ValidateCodexPath(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	path := filepath.Clean(value)
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("codex_path must be an absolute executable path")
+	}
+	if _, err := exec.LookPath(path); err != nil {
+		return "", fmt.Errorf("codex_path must name an executable file: %w", err)
+	}
+	return path, nil
 }
 
 // LoadCLIConfig reads the CLI config from disk (default profile).

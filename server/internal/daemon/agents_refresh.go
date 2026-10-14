@@ -323,7 +323,7 @@ func (d *Daemon) skippedAgentsSnapshot() map[string]string {
 // Returns the providers that were added, for logging and tests.
 func (d *Daemon) refreshAgentAvailability() []string {
 	current := d.agents()
-	probed := probeAgentCLIs()
+	probed := probeConfiguredAgentCLIs(d.cfg.CodexPath)
 
 	var gained []string
 	for name := range probed {

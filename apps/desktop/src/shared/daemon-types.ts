@@ -42,6 +42,16 @@ export interface DaemonPrefs {
   autoStop: boolean;
 }
 
+export interface CodexSettings {
+  profile?: string;
+  savedSharedHome: boolean;
+  effectiveSharedHome?: boolean;
+  home?: string;
+  executable?: string;
+  editable: boolean;
+  environmentOverride: boolean;
+}
+
 export type LocalRuntimeProbe =
   | {
       probeResult: "success";

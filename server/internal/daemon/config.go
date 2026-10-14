@@ -145,7 +145,9 @@ type Config struct {
 	// for app-servers that are legitimately slow to their first event (GH #3262).
 	CodexFirstTurnNoProgressTimeout time.Duration
 	CodexHandshakeTimeout           time.Duration
-	CodexSharedHome                 bool // opt into a common user Codex data home; false keeps task isolation
+	CodexSharedHome                 bool   // opt into a common user Codex data home; false keeps task isolation
+	CodexHome                       string // physical shared home resolved at startup; empty in isolated mode
+	CodexPath                       string // profile executable pin; MULTICA_CODEX_PATH still takes precedence
 	// CodexTurnInterruptTimeout is the bounded grace period after cancellation
 	// for app-server to acknowledge turn/interrupt and emit turn/completed.
 	// Operators can tune it with MULTICA_CODEX_TURN_INTERRUPT_TIMEOUT using the
@@ -246,11 +248,13 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// no overrides.
 	var profileCommandOverrides map[string]string
 	var persistedCodexSharedHome *bool
+	var codexPath string
 	if cliCfg, err := cli.LoadCLIConfigForProfile(overrides.Profile); err != nil {
 		slog.Warn("could not load CLI config for backend overrides; proceeding without",
 			"profile", overrides.Profile, "err", err)
 	} else {
 		persistedCodexSharedHome = cliCfg.CodexSharedHome
+		codexPath = cliCfg.CodexPath
 		if oc := openclawOverrideFrom(cliCfg); oc != nil {
 			applyOpenclawOverride(oc)
 		}
@@ -272,10 +276,23 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	var codexHome string
+	if codexSharedHome {
+		codexHome, err = execenv.ResolveSharedCodexHome()
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if strings.TrimSpace(os.Getenv("MULTICA_CODEX_PATH")) == "" {
+		codexPath, err = cli.ValidateCodexPath(codexPath)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 
 	// Discover installed agent CLIs. Extracted so the periodic workspace sync
 	// can re-run the same discovery on a live daemon (MUL-5439).
-	agents := probeAgentCLIs()
+	agents := probeConfiguredAgentCLIs(codexPath)
 	if len(agents) == 0 && !overrides.AllowNoAgents {
 		return Config{}, fmt.Errorf("no agent CLI found: install claude, codebuddy, codearts, codex, copilot, opencode, deveco, openclaw, hermes, pi, omp, cursor-agent, kimi, reasonix, dsh, kiro-cli, agy, qodercli, qoderclicn, traecli, grok, qwen, qwenpaw, mcode, dim, or zeroclaw and ensure it is on PATH")
 	}
@@ -670,6 +687,8 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		CodexFirstTurnNoProgressTimeout: codexFirstTurnNoProgressTimeout,
 		CodexHandshakeTimeout:           codexHandshakeTimeout,
 		CodexSharedHome:                 codexSharedHome,
+		CodexHome:                       codexHome,
+		CodexPath:                       codexPath,
 		CodexTurnInterruptTimeout:       codexTurnInterruptTimeout,
 		CodexThreadHandshakeTimeout:     codexThreadHandshakeTimeout,
 		OpenCodeIdleWatchdog:            openCodeIdleWatchdog,

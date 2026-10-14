@@ -22,6 +22,7 @@ import {
 import { AUTH_SESSION_STATE_CHANNEL } from "../shared/auth-session";
 import type {
   DaemonStatus,
+  CodexSettings,
   LocalRuntimeProbe,
 } from "../shared/daemon-types";
 import {
@@ -259,6 +260,10 @@ const daemonAPI = {
     ipcRenderer.invoke("daemon:restart"),
   getStatus: (): Promise<DaemonStatus> =>
     ipcRenderer.invoke("daemon:get-status"),
+  getCodexSettings: (): Promise<CodexSettings> =>
+    ipcRenderer.invoke("daemon:get-codex-settings"),
+  setCodexSharedHome: (enabled: boolean): Promise<CodexSettings> =>
+    ipcRenderer.invoke("daemon:set-codex-shared-home", enabled),
   probeRuntimes: (): Promise<LocalRuntimeProbe> =>
     ipcRenderer.invoke("daemon:probe-runtimes"),
   getHostName: (): Promise<string> =>

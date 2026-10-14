@@ -92,6 +92,17 @@ func cachedShellResolvedAgents() map[string]string {
 //
 // A var so tests can stub discovery without installing real CLIs.
 var probeAgentCLIs = func() map[string]AgentEntry {
+	return probeAgentCLIsWithCodexPath("")
+}
+
+func probeConfiguredAgentCLIs(codexPath string) map[string]AgentEntry {
+	if codexPath == "" {
+		return probeAgentCLIs()
+	}
+	return probeAgentCLIsWithCodexPath(codexPath)
+}
+
+func probeAgentCLIsWithCodexPath(codexPath string) map[string]AgentEntry {
 	// Probe available agent CLIs. exec.LookPath is the primary path, but on
 	// macOS/Linux a GUI-launched daemon (Electron, Launchpad) does not
 	// inherit the user's interactive shell PATH — fnm/nvm/volta multishells,
@@ -117,6 +128,9 @@ var probeAgentCLIs = func() map[string]AgentEntry {
 	getShellResolved := cachedShellResolvedAgents
 	probe := func(envVar, defaultCmd, modelEnv string) (AgentEntry, bool) {
 		cmd := envOrDefault(envVar, defaultCmd)
+		if envVar == "MULTICA_CODEX_PATH" && strings.TrimSpace(os.Getenv(envVar)) == "" && codexPath != "" {
+			cmd = codexPath
+		}
 		if path, err := resolveAgentExecutablePath(cmd); err == nil {
 			return AgentEntry{
 				Path:    path,

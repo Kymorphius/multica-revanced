@@ -6,6 +6,14 @@ and Multica tasks to use the same native conversation history and memory store.
 
 ## Select the mode
 
+Desktop exposes **Share Codex memory and conversations** under **Settings →
+This device → Daemon**. The switch saves only the resolved Desktop profile;
+it never starts, stops, or restarts a daemon. The page distinguishes the saved
+preference from the running daemon's observed mode and displays the observed
+shared directory and executable. Restart the daemon while idle to apply the
+new default to new native conversations. Environment-controlled or externally
+managed daemons cannot edit this preference from Desktop.
+
 Persist the choice in the daemon's profile:
 
 ```sh
@@ -18,10 +26,27 @@ The setting is resolved at daemon startup. Resolution order is an explicit
 enabled lower-priority setting. An empty config-set value clears the saved
 choice. Desktop preserves the profile setting across restarts.
 
-Switch only while that profile is idle, including pending terminal reports.
-Archive and import pre-existing isolated histories before enabling the mode.
-Preparation refuses to repoint a private home containing native data; it does
-not delete or silently abandon the previous conversation to make the switch.
+Pin the Codex executable when this personal profile must use a particular
+native installation:
+
+```sh
+multica --profile <profile> config set codex_path /absolute/path/to/codex
+```
+
+The path must name an executable file. `MULTICA_CODEX_PATH` takes precedence
+over the saved pin; an empty config-set value clears it and restores normal
+discovery. Startup and periodic availability discovery use the same profile
+pin without changing process environment variables. Neither command executes
+the candidate while saving the setting.
+
+Restart only while that profile is idle, including pending terminal reports.
+Existing native conversations retain their storage mode after either switch
+direction: continuation resolves the exact prior rollout in the canonical,
+scoped, or validated managed store. Distinct physical stores or missing evidence
+stop explicitly instead of creating a replacement conversation. The setting
+does not migrate historical data. Archive and import an isolated history
+explicitly if that conversation should join the shared home. Preparation
+refuses to repoint a private home containing native data.
 
 ## Configuration and native data
 
@@ -74,3 +99,9 @@ profile, native home and SQLite root, configuration invariance, cross-client
 history/resume, and memory source access. A successful source build does not
 prove the installed Desktop uses it: Desktop prefers its bundled CLI. Keep the
 original signed application when deploying a locally signed derived build.
+
+The daemon's local `/health` response always includes `codex_shared_home`.
+When enabled, `codex_home` is the physical shared directory resolved at startup;
+an invalid shared home prevents startup. `codex_path`, when Codex is available,
+is the resolved executable selected by the daemon's availability snapshot. It
+reflects an explicit environment override ahead of the saved profile pin.

@@ -13,6 +13,7 @@ import type {
 } from "../shared/updater-types";
 import type {
   DaemonStatus,
+  CodexSettings,
   DaemonPrefs,
   LocalRuntimeProbe,
 } from "../shared/daemon-types";
@@ -132,6 +133,8 @@ interface DaemonAPI {
   stop: () => Promise<{ success: boolean; error?: string }>;
   restart: () => Promise<{ success: boolean; error?: string }>;
   getStatus: () => Promise<DaemonStatus>;
+  getCodexSettings: () => Promise<CodexSettings>;
+  setCodexSharedHome: (enabled: boolean) => Promise<CodexSettings>;
   probeRuntimes: () => Promise<LocalRuntimeProbe>;
   getHostName: () => Promise<string>;
   onStatusChange: (callback: (status: DaemonStatus) => void) => () => void;

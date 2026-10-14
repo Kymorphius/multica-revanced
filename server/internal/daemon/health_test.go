@@ -20,6 +20,36 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 )
 
+func TestHealthHandlerCodexConfigurationReadback(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		d := New(Config{
+			WorkspacesRoot: t.TempDir(), CodexSharedHome: enabled,
+			CodexHome: filepath.Join(t.TempDir(), "physical-home"),
+			CodexPath: filepath.Join(t.TempDir(), "lower-priority-profile-pin"),
+			Agents:    map[string]AgentEntry{"codex": {Path: filepath.Join(t.TempDir(), "selected-native-codex")}},
+		}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		rec := httptest.NewRecorder()
+		d.healthHandler(time.Now()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+		var raw map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if got, present := raw["codex_shared_home"]; !present || got != enabled {
+			t.Fatalf("shared mode wire readback = %v, present %v; want %v", got, present, enabled)
+		}
+		if got := raw["codex_path"]; got != d.agents()["codex"].Path {
+			t.Fatalf("health path = %v; selected path %q", got, d.agents()["codex"].Path)
+		}
+		if got, present := raw["codex_home"]; present != enabled || (enabled && got != d.cfg.CodexHome) {
+			t.Fatalf("home = %v, present %v; enabled %v", got, present, enabled)
+		}
+		var typed HealthResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &typed); err != nil || typed.CodexSharedHome != enabled || typed.CodexPath != d.agents()["codex"].Path {
+			t.Fatalf("typed readback: %+v, %v", typed, err)
+		}
+	}
+}
+
 func TestHealthHandlerReportsEmptyCLICommitWithoutFallback(t *testing.T) {
 	d := &Daemon{
 		cfg:        Config{CLIVersion: "v9.9.9", DaemonID: "daemon-test", ServerBaseURL: "https://api.example.test"},

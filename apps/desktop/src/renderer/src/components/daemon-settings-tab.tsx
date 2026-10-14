@@ -1,4 +1,11 @@
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useId,
+  useRef,
+  type ReactNode,
+} from "react";
 import { AlertCircle, Info, LogIn } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Switch } from "@multica/ui/components/ui/switch";
@@ -12,7 +19,11 @@ import {
 } from "@multica/views/settings";
 import { useT } from "@multica/views/i18n";
 import { reauthenticateDaemon } from "../platform/daemon-reauth";
-import type { DaemonPrefs, DaemonStatus } from "../../../shared/daemon-types";
+import type {
+  CodexSettings,
+  DaemonPrefs,
+  DaemonStatus,
+} from "../../../shared/daemon-types";
 import {
   DAEMON_STATE_COLORS,
   formatUptime,
@@ -25,17 +36,20 @@ function DiagnosticsRow({
   label,
   value,
   mono,
+  wrap,
 }: {
   label: string;
   value: ReactNode;
   mono?: boolean;
+  wrap?: boolean;
 }) {
   return (
     <div className="grid grid-cols-[140px_minmax(0,1fr)] items-baseline gap-3 py-1.5">
       <span className="text-caption text-muted-foreground">{label}</span>
       <span
         className={cn(
-          "min-w-0 truncate text-body",
+          "min-w-0 text-body",
+          wrap ? "select-text break-all whitespace-normal" : "truncate",
           mono && "font-mono text-caption",
         )}
         title={typeof value === "string" ? value : undefined}
@@ -53,6 +67,52 @@ export function DaemonSettingsTab() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<DaemonStatus>({ state: "stopped" });
   const [reauthLoading, setReauthLoading] = useState(false);
+  const [codexSettings, setCodexSettings] = useState<CodexSettings | null>(null);
+  const [codexLoading, setCodexLoading] = useState(true);
+  const [codexSaving, setCodexSaving] = useState(false);
+  const [codexError, setCodexError] = useState<{
+    kind: "read" | "save";
+    message: string;
+  } | null>(null);
+  const codexLabelId = useId();
+  const codexDescriptionId = useId();
+  const mounted = useRef(false);
+  const codexRequest = useRef(0);
+  const codexSavePending = useRef(false);
+  const codexRefreshPending = useRef(false);
+
+  const refreshCodexSettings = useCallback(async () => {
+    if (codexSavePending.current) {
+      codexRefreshPending.current = true;
+      return;
+    }
+    const request = ++codexRequest.current;
+    try {
+      const settings = await window.daemonAPI.getCodexSettings();
+      if (mounted.current && request === codexRequest.current) {
+        setCodexSettings(settings);
+        setCodexError((error) => (error?.kind === "read" ? null : error));
+      }
+    } catch {
+      if (mounted.current && request === codexRequest.current) {
+        setCodexError({
+          kind: "read",
+          message: t(($) => $.desktop.daemon.codex_load_failed),
+        });
+      }
+    } finally {
+      if (mounted.current && request === codexRequest.current) {
+        setCodexLoading(false);
+      }
+    }
+  }, [t]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     window.daemonAPI.getPrefs().then(setPrefs);
@@ -60,6 +120,40 @@ export function DaemonSettingsTab() {
     window.daemonAPI.getStatus().then(setStatus);
     return window.daemonAPI.onStatusChange(setStatus);
   }, []);
+
+  useEffect(() => {
+    void refreshCodexSettings();
+  }, [status, refreshCodexSettings]);
+
+  const updateCodexSharedHome = useCallback(async (sharedHome: boolean) => {
+    if (codexSavePending.current) return;
+    codexSavePending.current = true;
+    const request = ++codexRequest.current;
+    setCodexSaving(true);
+    setCodexError(null);
+    try {
+      const updated = await window.daemonAPI.setCodexSharedHome(sharedHome);
+      if (mounted.current && request === codexRequest.current) {
+        setCodexSettings(updated);
+      }
+    } catch {
+      if (mounted.current && request === codexRequest.current) {
+        setCodexError({
+          kind: "save",
+          message: t(($) => $.desktop.daemon.codex_save_failed),
+        });
+      }
+    } finally {
+      codexSavePending.current = false;
+      if (mounted.current && request === codexRequest.current) {
+        setCodexSaving(false);
+        if (codexRefreshPending.current) {
+          codexRefreshPending.current = false;
+          void refreshCodexSettings();
+        }
+      }
+    }
+  }, [refreshCodexSettings, t]);
 
   const handleReauth = useCallback(async () => {
     setReauthLoading(true);
@@ -94,6 +188,28 @@ export function DaemonSettingsTab() {
   // its process. Auto-start/auto-stop can't work, so disable them and say why
   // rather than letting the toggles silently no-op. See #3916.
   const externallyManaged = status.externallyManaged === true;
+  const codexUnavailable = externallyManaged
+    ? t(($) => $.desktop.daemon.codex_external_unavailable)
+    : codexSettings?.environmentOverride
+      ? t(($) => $.desktop.daemon.codex_environment_override)
+      : codexSettings && !codexSettings.editable
+        ? t(($) => $.desktop.daemon.codex_profile_unavailable)
+        : null;
+  const codexState = codexError?.kind === "read"
+    ? null
+    : codexLoading
+    ? t(($) => $.desktop.daemon.codex_loading)
+    : codexSaving
+      ? t(($) => $.desktop.daemon.codex_saving)
+      : codexSettings
+        ? typeof codexSettings.effectiveSharedHome !== "boolean"
+          ? t(($) => $.desktop.daemon.codex_next_start)
+          : !codexSettings.environmentOverride && codexSettings.savedSharedHome !== codexSettings.effectiveSharedHome
+            ? t(($) => $.desktop.daemon.codex_saved_pending)
+            : codexSettings.effectiveSharedHome
+              ? t(($) => $.desktop.daemon.codex_active_shared)
+              : t(($) => $.desktop.daemon.codex_active_isolated)
+        : null;
 
   return (
     <SettingsTab
@@ -185,6 +301,42 @@ export function DaemonSettingsTab() {
         </SettingsRow>
       </SettingsCard>
 
+      <SettingsCard>
+        <SettingsRow
+          label={
+            <span id={codexLabelId}>
+              {t(($) => $.desktop.daemon.codex_shared_title)}
+            </span>
+          }
+          description={
+            <div id={codexDescriptionId}>
+              <p>{t(($) => $.desktop.daemon.codex_shared_description)}</p>
+              {codexState && (
+                <p className="mt-1" role="status">{codexState}</p>
+              )}
+              {codexUnavailable && <p className="mt-1">{codexUnavailable}</p>}
+              {codexError && (
+                <p className="mt-1 text-destructive" role="alert">
+                  {codexError.message}
+                </p>
+              )}
+            </div>
+          }
+        >
+          <Switch
+            aria-labelledby={codexLabelId}
+            aria-describedby={codexDescriptionId}
+            aria-busy={codexLoading || codexSaving}
+            checked={codexSettings?.savedSharedHome ?? false}
+            onCheckedChange={updateCodexSharedHome}
+            disabled={
+              codexLoading || codexSaving || codexError?.kind === "read" ||
+              !!codexUnavailable || !codexSettings
+            }
+          />
+        </SettingsRow>
+      </SettingsCard>
+
       {/* Diagnostics — moved out of the logs panel so the panel can focus
           on logs. These fields matter for support tickets and bug reports,
           not for everyday use. */}
@@ -223,7 +375,7 @@ export function DaemonSettingsTab() {
           />
           <DiagnosticsRow
             label={t(($) => $.desktop.daemon.profile)}
-            value={status.profile || "default"}
+            value={codexSettings?.profile || status.profile || "default"}
           />
           <DiagnosticsRow
             label={t(($) => $.desktop.daemon.server_url)}
@@ -241,6 +393,18 @@ export function DaemonSettingsTab() {
                 ? status.workspaceCount
                 : "—"
             }
+          />
+          <DiagnosticsRow
+            label={t(($) => $.desktop.daemon.codex_shared_home)}
+            value={codexSettings?.home ?? t(($) => $.desktop.daemon.codex_unavailable)}
+            mono
+            wrap
+          />
+          <DiagnosticsRow
+            label={t(($) => $.desktop.daemon.codex_executable)}
+            value={codexSettings?.executable ?? t(($) => $.desktop.daemon.codex_unavailable)}
+            mono
+            wrap
           />
           </div>
         </SettingsCard>

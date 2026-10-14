@@ -19,6 +19,7 @@ import { homedir, hostname } from "os";
 import type {
   DaemonStatus,
   DaemonPrefs,
+  CodexSettings,
   LocalRuntimeProbe,
 } from "../shared/daemon-types";
 import { daemonStatusAlive } from "../shared/daemon-types";
@@ -52,6 +53,9 @@ import {
   isAuthStatusError,
   type AuthProbeResult,
 } from "./daemon-auth-probe";
+import { DaemonProfileConfigStore } from "./daemon-profile-config";
+import { assertCodexSharedHomeInput, codexSettingsSnapshot } from "./codex-settings";
+import { parseDaemonHealth, type DaemonHealth as HealthPayload } from "./daemon-health";
 
 const POLL_INTERVAL_MS = 5_000;
 const PREFS_PATH = join(homedir(), ".multica", "desktop_prefs.json");
@@ -114,11 +118,7 @@ let startingSince: number | null = null;
 let authProbeDone = false;
 let authExpired = false;
 
-// Serialize all writes to any profile config file. Multiple paths
-// (syncToken, resolveActiveProfile, clearToken, watch/unwatch handlers)
-// may try to write concurrently; chaining them avoids interleaved writes
-// corrupting the JSON.
-let configWriteChain: Promise<void> = Promise.resolve();
+const profileConfigStore = new DaemonProfileConfigStore(profileConfigPath);
 
 async function readProfileUserId(profile: string): Promise<string | null> {
   try {
@@ -167,22 +167,6 @@ function sendStatus(status: DaemonStatus): void {
   win?.webContents.send("daemon:status", status);
 }
 
-interface HealthPayload {
-  status?: string;
-  pid?: number;
-  profile?: string;
-  /** Daemon's runtime.GOOS. Absent on daemons older than the #3916 fix. */
-  os?: string;
-  uptime?: string;
-  daemon_id?: string;
-  device_name?: string;
-  server_url?: string;
-  cli_version?: string;
-  active_task_count?: number;
-  agents?: string[];
-  workspaces?: unknown[];
-}
-
 async function fetchHealthAtPort(
   port: number,
   timeoutMs = HEALTH_PROBE_TIMEOUT_MS,
@@ -194,7 +178,7 @@ async function fetchHealthAtPort(
       signal: controller.signal,
     });
     if (!res.ok) return null;
-    return (await res.json()) as HealthPayload;
+    return parseDaemonHealth(await res.json());
   } catch {
     return null;
   } finally {
@@ -244,30 +228,14 @@ async function probeTokenValidity(profile: string): Promise<AuthProbeResult> {
 async function readProfileConfig(
   profile: string,
 ): Promise<Record<string, unknown>> {
-  try {
-    const raw = await readFile(profileConfigPath(profile), "utf-8");
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+  return profileConfigStore.read(profile);
 }
 
-async function writeProfileConfig(
+async function updateProfileConfig(
   profile: string,
-  cfg: Record<string, unknown>,
+  mutate: (current: Record<string, unknown>) => void,
 ): Promise<void> {
-  const op = async () => {
-    await mkdir(profileDir(profile), { recursive: true });
-    await writeFile(
-      profileConfigPath(profile),
-      JSON.stringify(cfg, null, 2),
-      "utf-8",
-    );
-  };
-  const next = configWriteChain.catch(() => {}).then(op);
-  configWriteChain = next.catch(() => {});
-  return next;
+  return profileConfigStore.update(profile, mutate);
 }
 
 /**
@@ -284,13 +252,9 @@ async function resolveActiveProfile(): Promise<ActiveProfile | null> {
   if (!target) return null;
 
   const name = deriveProfileName(target);
-  const cfg = await readProfileConfig(name);
-
-  if (cfg.server_url !== target) {
+  await updateProfileConfig(name, (cfg) => {
     cfg.server_url = target;
-    await writeProfileConfig(name, cfg);
-    console.log(`[daemon] initialized profile "${name}" → ${target}`);
-  }
+  });
 
   return { name };
 }
@@ -300,7 +264,11 @@ async function ensureActiveProfile(): Promise<ActiveProfile | null> {
   // Only a resolved profile is cached; the target URL arrives over IPC shortly
   // after startup, and caching "unresolved" would persist until something
   // happened to invalidate it.
-  activeProfile = await resolveActiveProfile();
+  const target = targetApiBaseUrl;
+  const resolved = await resolveActiveProfile();
+  // A login/server change can arrive while profile IO is in flight.
+  if (targetApiBaseUrl !== target) return null;
+  activeProfile = resolved;
   return activeProfile;
 }
 
@@ -308,6 +276,59 @@ function invalidateActiveProfile(): void {
   activeProfile = null;
   externalDaemonObserved = false;
   recoveryPolicy.reset();
+}
+
+async function getCodexSettings(): Promise<CodexSettings> {
+  const target = targetApiBaseUrl;
+  const active = await ensureActiveProfile();
+  if (!active || targetApiBaseUrl !== target) {
+    return codexSettingsSnapshot({
+      savedSharedHome: false,
+      health: null,
+      externallyManaged: false,
+      environmentValue: process.env.MULTICA_CODEX_SHARED_HOME,
+    });
+  }
+  const config = await readProfileConfig(active.name);
+  const health = await fetchProfileHealth(active);
+  if (targetApiBaseUrl !== target || activeProfile?.name !== active.name) {
+    throw new Error("daemon profile changed while reading Codex settings");
+  }
+  const matchingHealth = health?.profile === active.name &&
+    (!health.server_url || (target && urlsMatch(health.server_url, target)))
+    ? health
+    : null;
+  return codexSettingsSnapshot({
+    profile: active.name,
+    savedSharedHome: config.codex_shared_home === true,
+    health: matchingHealth,
+    externallyManaged: externalDaemonObserved || isDaemonExternallyManaged(
+      matchingHealth?.os,
+      normalizeHostOS(process.platform),
+    ),
+    environmentValue: process.env.MULTICA_CODEX_SHARED_HOME,
+  });
+}
+
+async function setCodexSharedHome(enabled: unknown): Promise<CodexSettings> {
+  assertCodexSharedHomeInput(enabled);
+  const target = targetApiBaseUrl;
+  const settings = await getCodexSettings();
+  if (!settings.editable || !settings.profile) {
+    throw new Error("Codex settings are not editable for this daemon profile");
+  }
+  await updateProfileConfig(settings.profile, (config) => {
+    if (
+      targetApiBaseUrl !== target ||
+      activeProfile?.name !== settings.profile ||
+      externalDaemonObserved ||
+      process.env.MULTICA_CODEX_SHARED_HOME
+    ) {
+      throw new Error("daemon profile changed while saving Codex settings");
+    }
+    config.codex_shared_home = enabled;
+  });
+  return getCodexSettings();
 }
 
 function setDesiredDaemonRunning(desired: boolean, explicit = false): void {
@@ -654,11 +675,8 @@ async function ensureRunningDaemonVersionMatches(): Promise<
  * daemon needs a PAT (or `mul_` / `mdt_` token) because JWTs expire in 30
  * days and signatures are tied to a specific backend instance.
  */
-async function mintPat(jwt: string): Promise<string> {
-  if (!targetApiBaseUrl) {
-    throw new Error("mint PAT: target API URL not set");
-  }
-  const url = `${targetApiBaseUrl.replace(/\/+$/, "")}/api/tokens`;
+async function mintPat(jwt: string, target: string): Promise<string> {
+  const url = `${target.replace(/\/+$/, "")}/api/tokens`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -704,8 +722,9 @@ async function syncToken(
   tokenFromRenderer: string,
   userId: string,
 ): Promise<{ active: ActiveProfile; userChanged: boolean }> {
+  const target = targetApiBaseUrl;
   const active = await ensureActiveProfile();
-  if (!active) {
+  if (!active || !target || targetApiBaseUrl !== target) {
     // Writing here would land the token and server_url in the user's default
     // CLI config. The renderer awaits setTargetApiUrl before calling this, so
     // reaching this branch is a real error rather than a normal startup race.
@@ -727,7 +746,7 @@ async function syncToken(
     finalToken = config.token as string;
   } else {
     try {
-      finalToken = await mintPat(tokenFromRenderer);
+      finalToken = await mintPat(tokenFromRenderer, target);
       console.log(
         `[daemon] minted PAT for profile "${active.name}" (user_changed=${userChanged})`,
       );
@@ -737,9 +756,13 @@ async function syncToken(
     }
   }
 
-  config.token = finalToken;
-  if (targetApiBaseUrl) config.server_url = targetApiBaseUrl;
-  await writeProfileConfig(active.name, config);
+  await updateProfileConfig(active.name, (current) => {
+    if (targetApiBaseUrl !== target || activeProfile?.name !== active.name) {
+      throw new Error("daemon profile changed while syncing credentials");
+    }
+    current.token = finalToken;
+    current.server_url = target;
+  });
   await writeProfileUserId(active.name, userId);
 
   return { active, userChanged };
@@ -792,11 +815,9 @@ async function clearToken(): Promise<void> {
   // Nothing of ours to clear yet, and the default CLI profile is not ours to
   // strip a token from.
   if (!active) return;
-  const config = await readProfileConfig(active.name);
-  if ("token" in config) {
+  await updateProfileConfig(active.name, (config) => {
     delete config.token;
-    await writeProfileConfig(active.name, config);
-  }
+  });
   // Always drop the sidecar so a subsequent syncToken from any user is
   // treated as a fresh mint, not a reuse of a stale cached PAT.
   await removeProfileUserId(active.name);
@@ -1381,6 +1402,10 @@ export function setupDaemonManager(
     return lifecycleOperations.runForeground(() => restartDaemon());
   });
   ipcMain.handle("daemon:get-status", () => fetchHealth());
+  ipcMain.handle("daemon:get-codex-settings", () => getCodexSettings());
+  ipcMain.handle("daemon:set-codex-shared-home", (_event, enabled: unknown) =>
+    setCodexSharedHome(enabled),
+  );
   ipcMain.handle("daemon:probe-runtimes", () => probeLocalRuntimes());
   // The host's OS name, available regardless of daemon state. The Runtimes
   // page uses it as a fallback identity for "this machine" when no

@@ -53,6 +53,8 @@ func TestResolveCodexSharedHomePrecedenceAndStrictEnvironment(t *testing.T) {
 
 func TestLoadConfigCodexSharedHomeReadsSelectedProfile(t *testing.T) {
 	redirectTestHome(t, t.TempDir())
+	sharedHome := t.TempDir()
+	t.Setenv("CODEX_HOME", sharedHome)
 	// Every agent path is explicit and missing so config resolution cannot
 	// discover installed agents, a desktop bundle, or a user's login shell.
 	missingDir := t.TempDir()
