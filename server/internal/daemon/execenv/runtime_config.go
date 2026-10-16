@@ -204,7 +204,7 @@ func runtimeConfigPath(workDir, provider string) string {
 		return runtimeConfigPath(workDir, desc.ProtocolFamily)
 	}
 	switch provider {
-	case "claude":
+	case "claude", "agentdeck": // agentdeck runs Claude inside an agent-deck session
 		return filepath.Join(workDir, "CLAUDE.md")
 	case "codebuddy":
 		// CodeBuddy Code's native memory file is CODEBUDDY.md, not

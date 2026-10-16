@@ -392,6 +392,8 @@ var SupportedTypes = []string{
 	"mcode",
 	"dim",
 	"zeroclaw",
+	// Fork-local: runs the task inside an agent-deck session (agentdeck.go).
+	"agentdeck",
 }
 
 // IsSupportedType reports whether agentType is in the SupportedTypes whitelist.
@@ -453,6 +455,8 @@ func New(agentType string, cfg Config) (Backend, error) {
 		return &claudeBackend{cfg: cfg}, nil
 	case "codebuddy":
 		return &codebuddyBackend{cfg: cfg}, nil
+	case "agentdeck":
+		return &agentdeckBackend{cfg: cfg}, nil
 	case "codex":
 		return &codexBackend{cfg: cfg}, nil
 	case "copilot":
@@ -542,6 +546,7 @@ var launchHeaders = map[string]string{
 	"qwen":        "qwen -p (stream-json)",
 	"qwenpaw":     "qwenpaw acp",
 	"dim":         "dim acp",
+	"agentdeck":   "agent-deck launch -c claude (interactive session)",
 	"mcode":       "mcode acp",
 	"zeroclaw":    "zeroclaw acp",
 }
