@@ -53,7 +53,7 @@ func agentdeckJSONString(s string) string {
 
 func newFakeAgentdeckBackend(f *fakeAgentdeck) *agentdeckBackend {
 	return &agentdeckBackend{
-		cfg:  Config{Logger: slog.Default(), TaskID: "task-12345678", Env: map[string]string{"MULTICA_TOKEN": "mat_secret'x", "BAD-KEY": "skip"}},
+		cfg:  Config{Logger: slog.Default(), TaskID: "task-12345678", Env: map[string]string{"MULTICA_TOKEN": "mat_secret'x", "BAD-KEY": "skip", "PATH": "/App/bin:/usr/bin:/bin"}},
 		run:  f.run,
 		poll: 5 * time.Millisecond, settle: 10 * time.Millisecond,
 	}
@@ -90,7 +90,7 @@ func TestAgentdeckRunsTaskInSessionWithPrivateEnv(t *testing.T) {
 	if strings.Contains(joined, "mat_secret") || !strings.Contains(joined, "-t PP-12 修复登录") || !strings.Contains(joined, "-g Multica") || f.stdin[0] != "修复登录" {
 		t.Fatalf("launch = %v / stdin %q", launch, f.stdin[0])
 	}
-	if f.envMode != 0o600 || f.envSeen != "export MULTICA_TOKEN='mat_secret'\\''x'\n" {
+	if f.envMode != 0o600 || f.envSeen != "export MULTICA_TOKEN='mat_secret'\\''x'\nexport PATH='/App/bin':\"$PATH\"\n" {
 		t.Fatalf("env file %o %q", f.envMode, f.envSeen)
 	}
 	for i, a := range launch {

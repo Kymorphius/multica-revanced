@@ -84,9 +84,22 @@ func writeAgentdeckEnv(env map[string]string) (string, func(), error) {
 		}
 	}
 	sort.Strings(keys)
+	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'" }
 	var sb strings.Builder
 	for _, k := range keys {
-		sb.WriteString("export " + k + "='" + strings.ReplaceAll(env[k], "'", `'\''`) + "'\n")
+		if k == "PATH" {
+			// The daemon's PATH is the GUI app's minimal one. Replacing the
+			// session's PATH with it would drop the user's own bin dirs (and any
+			// wrapper the agent-deck tool relies on, e.g. ~/.local/bin/claude),
+			// so only the multica CLI's directory — its first entry — is added
+			// in front of what agent-deck already set up.
+			first, _, _ := strings.Cut(env[k], string(os.PathListSeparator))
+			if first != "" {
+				sb.WriteString("export PATH=" + quote(first) + `:"$PATH"` + "\n")
+			}
+			continue
+		}
+		sb.WriteString("export " + k + "=" + quote(env[k]) + "\n")
 	}
 	path := filepath.Join(dir, "task.env")
 	if err := os.WriteFile(path, []byte(sb.String()), 0o600); err != nil {
