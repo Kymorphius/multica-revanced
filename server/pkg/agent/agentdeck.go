@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,9 +30,18 @@ type agentdeckBackend struct {
 	// poll is the status polling interval; settle is how long a finished
 	// status must hold before the turn counts as ended.
 	poll, settle time.Duration
+	// do sends Multica API requests; tests replace it.
+	do func(*http.Request) (*http.Response, error)
 }
 
-const agentdeckGroup = "Multica"
+// agentdeckGroup is where a session goes unless its issue names an existing
+// agent-deck group in the "agent-deck 分组" custom property.
+const (
+	agentdeckGroup         = "Multica"
+	agentdeckGroupProperty = "agent-deck 分组"
+)
+
+var agentdeckIssueID = regexp.MustCompile(`Your assigned issue ID is: ([0-9A-Fa-f-]{36})`)
 
 var (
 	agentdeckSentinel = regexp.MustCompile(`(?m)^===AGENTDECK_DONE=== status=(ok|fail)(?: summary=(.*))?\s*$`)
@@ -120,6 +130,103 @@ func agentdeckTool(args []string) string {
 	return "claude"
 }
 
+// apiGet reads one Multica API path with the task-scoped token the daemon
+// prepared for this run.
+func (b *agentdeckBackend) apiGet(ctx context.Context, path string, out any) error {
+	server, token := strings.TrimRight(b.cfg.Env["MULTICA_SERVER_URL"], "/"), b.cfg.Env["MULTICA_TOKEN"]
+	if server == "" || token == "" {
+		return fmt.Errorf("no task server or token")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	if ws := b.cfg.Env["MULTICA_WORKSPACE_ID"]; ws != "" {
+		req.Header.Set("X-Workspace-ID", ws)
+	}
+	do := b.do
+	if do == nil {
+		do = http.DefaultClient.Do
+	}
+	resp, err := do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: HTTP %d", path, resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// resolveGroup picks the agent-deck group for the session: the issue's
+// "agent-deck 分组" property when it names a group that exists in agent-deck,
+// otherwise Multica. Any failure falls back quietly; the run must not depend
+// on it.
+func (b *agentdeckBackend) resolveGroup(ctx context.Context, prompt string) string {
+	m := agentdeckIssueID.FindStringSubmatch(prompt)
+	if m == nil {
+		return agentdeckGroup
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	var defs struct {
+		Properties []struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Archived bool   `json:"archived"`
+		} `json:"properties"`
+	}
+	if err := b.apiGet(ctx, "/api/properties", &defs); err != nil {
+		b.cfg.Logger.Info("agent-deck group: properties unreadable, using default", "error", err)
+		return agentdeckGroup
+	}
+	propID := ""
+	for _, d := range defs.Properties {
+		if d.Name == agentdeckGroupProperty && !d.Archived {
+			propID = d.ID
+		}
+	}
+	if propID == "" {
+		return agentdeckGroup
+	}
+	var issue struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := b.apiGet(ctx, "/api/issues/"+m[1], &issue); err != nil {
+		b.cfg.Logger.Info("agent-deck group: issue unreadable, using default", "error", err)
+		return agentdeckGroup
+	}
+	want, _ := issue.Properties[propID].(string)
+	if want = strings.TrimSpace(want); want == "" {
+		return agentdeckGroup
+	}
+	raw, err := b.runCmd(ctx, "", "group", "list", "--json")
+	var tree struct {
+		Groups []agentdeckGroupNode `json:"groups"`
+	}
+	if err != nil || json.Unmarshal(bytes.TrimSpace(raw), &tree) != nil || !agentdeckHasGroup(tree.Groups, want) {
+		b.cfg.Logger.Info("agent-deck group: not found, using default", "group", want)
+		return agentdeckGroup
+	}
+	return want
+}
+
+type agentdeckGroupNode struct {
+	Path     string               `json:"path"`
+	Children []agentdeckGroupNode `json:"children"`
+}
+
+func agentdeckHasGroup(nodes []agentdeckGroupNode, path string) bool {
+	for _, n := range nodes {
+		if n.Path == path || agentdeckHasGroup(n.Children, path) {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *agentdeckBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	if b.run == nil {
 		if _, err := exec.LookPath(b.exe()); err != nil {
@@ -144,7 +251,8 @@ func (b *agentdeckBackend) Execute(ctx context.Context, prompt string, opts Exec
 	if title == "" {
 		title = "Multica " + shortID(b.cfg.TaskID)
 	}
-	args := []string{"launch", "-c", agentdeckTool(opts.CustomArgs), "--json", "-t", title, "-g", agentdeckGroup,
+	group := b.resolveGroup(ctx, prompt)
+	args := []string{"launch", "-c", agentdeckTool(opts.CustomArgs), "--json", "-t", title, "-g", group,
 		"-no-parent", "--env-file", envFile, "--message-file", "-", opts.Cwd}
 	launchCtx, launchCancel := context.WithTimeout(ctx, 3*time.Minute)
 	out, err := b.runCmd(launchCtx, prompt, args...)
@@ -165,7 +273,7 @@ func (b *agentdeckBackend) Execute(ctx context.Context, prompt string, opts Exec
 		}
 		return nil, err
 	}
-	b.cfg.Logger.Info("agent-deck session launched", "session", id, "cwd", opts.Cwd)
+	b.cfg.Logger.Info("agent-deck session launched", "session", id, "group", group, "cwd", opts.Cwd)
 
 	msgs := make(chan Message, 64)
 	results := make(chan Result, 1)

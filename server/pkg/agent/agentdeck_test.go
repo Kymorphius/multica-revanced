@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -41,6 +43,8 @@ func (f *fakeAgentdeck) run(_ context.Context, stdin string, args ...string) ([]
 			st, f.statuses = f.statuses[0], f.statuses[1:]
 		}
 		return []byte(`{"id":"sess-1","status":"` + st + `"}`), nil
+	case args[0] == "group":
+		return []byte(`{"groups":[{"path":"Tools","children":[{"path":"Tools/Agent-Deck"}]},{"path":"Multica"}]}`), nil
 	case args[0] == "session" && args[1] == "output":
 		return []byte(`{"content":` + agentdeckJSONString(f.output) + `}`), nil
 	}
@@ -136,5 +140,43 @@ func TestAgentdeckFailureSentinelAndCancel(t *testing.T) {
 	}
 	if agentdeckTool([]string{"--tool=codex"}) != "codex" || agentdeckTool([]string{"--tool=rm"}) != "claude" {
 		t.Fatal("tool selection")
+	}
+}
+
+func TestAgentdeckGroupFromIssueProperty(t *testing.T) {
+	issueID := "11111111-1111-4111-8111-111111111111"
+	group := "Tools/Agent-Deck"
+	var paths []string
+	do := func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path+" "+req.Header.Get("Authorization")+" "+req.Header.Get("X-Workspace-ID"))
+		body := `{"properties":[{"id":"p-old","name":"agent-deck 分组","archived":true},{"id":"p1","name":"agent-deck 分组"}]}`
+		if strings.HasPrefix(req.URL.Path, "/api/issues/") {
+			body = `{"id":"` + issueID + `","properties":{"p1":"` + group + `","p-old":"Network"}}`
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}
+	b := &agentdeckBackend{cfg: Config{Logger: slog.Default(), Env: map[string]string{"MULTICA_SERVER_URL": "http://server.test:33400", "MULTICA_TOKEN": "mat_t", "MULTICA_WORKSPACE_ID": "ws1"}},
+		run: (&fakeAgentdeck{}).run, do: do}
+	prompt := "You are running as a local coding agent for a Multica workspace.\n\nYour assigned issue ID is: " + issueID + "\n\n"
+	if got := b.resolveGroup(context.Background(), prompt); got != group {
+		t.Fatalf("group = %q", got)
+	}
+	if len(paths) != 2 || paths[0] != "/api/properties Bearer mat_t ws1" || !strings.HasPrefix(paths[1], "/api/issues/"+issueID) {
+		t.Fatalf("requests = %v", paths)
+	}
+	group = "No/Such"
+	if got := b.resolveGroup(context.Background(), prompt); got != "Multica" {
+		t.Fatalf("unknown group must fall back, got %q", got)
+	}
+	group = ""
+	if got := b.resolveGroup(context.Background(), prompt); got != "Multica" {
+		t.Fatalf("empty property must fall back, got %q", got)
+	}
+	if got := b.resolveGroup(context.Background(), "no issue id here"); got != "Multica" {
+		t.Fatalf("no issue id: %q", got)
+	}
+	b.cfg.Env = map[string]string{}
+	if got := b.resolveGroup(context.Background(), prompt); got != "Multica" {
+		t.Fatalf("no token: %q", got)
 	}
 }
