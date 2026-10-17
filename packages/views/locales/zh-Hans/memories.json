@@ -1,0 +1,47 @@
+{
+  "title": "共享记忆",
+  "create": "保存记忆",
+  "sharing": "所有已保存的记忆均对工作区成员可见。不同 AI 提供方的智能体可使用工作区记忆，以及任务所属项目的记忆。",
+  "automatic": {
+    "title": "自动保存任务经验",
+    "description": "智能体可在任务中提炼可复用的知识，保存后立即共享。私人聊天不会自动共享。",
+    "permission": "只有 owner 和 admin 可以修改此设置。",
+    "failed": "无法加载或修改自动保存设置。"
+  },
+  "search": "搜索记忆",
+  "loading": "正在加载记忆...",
+  "load_failed": "无法加载记忆",
+  "retry": "重试",
+  "no_results": "没有匹配的记忆",
+  "empty": "暂无已保存的记忆",
+  "edit_named": "编辑 {{title}}",
+  "delete_named": "删除 {{title}}",
+  "project_scope": "项目：{{name}}",
+  "workspace_scope": "整个工作区",
+  "source": {
+    "manual": "手动保存",
+    "automatic": "自动提炼",
+    "unknown": "来源未知"
+  },
+  "load_more": "加载更多",
+  "edit": "编辑记忆",
+  "editor_hint": "请确认共享范围，保存后无法更改范围。",
+  "fields": {
+    "title": "标题",
+    "content": "内容",
+    "scope": "适用范围"
+  },
+  "conflict": "编辑期间，这条记忆已被修改。已保留你的草稿，请先查看最新版本。",
+  "conflict_load_failed": "这条记忆已被修改，但无法加载最新版本。请关闭后重新打开查看，草稿仍保留在此处。",
+  "save_failed": "无法保存记忆，已保留你的草稿。",
+  "latest": "最新已保存版本",
+  "reload_latest": "用最新版本替换草稿",
+  "cancel": "取消",
+  "saving": "正在保存...",
+  "save": "保存",
+  "delete_title": "删除记忆？",
+  "delete_description": "删除后，工作区成员和智能体将无法再使用“{{title}}”。",
+  "delete_conflict": "这条记忆已被修改，请关闭弹窗并刷新列表后再删除。",
+  "delete_failed": "无法删除记忆，请关闭弹窗后重试。",
+  "delete": "删除"
+}

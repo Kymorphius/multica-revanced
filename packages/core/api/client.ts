@@ -113,6 +113,11 @@ import type {
   CreateProjectResourceRequest,
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
+  SharedMemory,
+  MemorySettings,
+  MemoryListParams,
+  CreateMemoryRequest,
+  UpdateMemoryRequest,
   Label,
   IssueProperty,
   IssuePropertyValue,
@@ -403,6 +408,11 @@ import {
   EMPTY_INBOX_ITEMS,
   NotificationPreferenceResponseSchema,
   EMPTY_NOTIFICATION_PREFERENCE_RESPONSE,
+  SharedMemorySchema,
+  SharedMemoryListSchema,
+  EMPTY_SHARED_MEMORY,
+  MemorySettingsSchema,
+  EMPTY_MEMORY_SETTINGS,
   LabelSchema,
   ListLabelsResponseSchema,
   ListIssueStatusesResponseSchema,
@@ -4079,6 +4089,51 @@ export class ApiClient {
     await this.fetch(`/api/projects/${projectId}/resources/${resourceId}`, {
       method: "DELETE",
     });
+  }
+
+  async listMemories(params: MemoryListParams = {}): Promise<SharedMemory[]> {
+    const search = new URLSearchParams();
+    if (params.q) search.set("q", params.q);
+    if (params.projectId) search.set("project_id", params.projectId);
+    search.set("limit", String(params.limit ?? 100));
+    search.set("offset", String(params.offset ?? 0));
+    const raw = await this.fetch<unknown>(`/api/memories?${search}`);
+    return parseWithFallback(raw, SharedMemoryListSchema, [], { endpoint: "GET /api/memories" });
+  }
+
+  async getMemory(id: string): Promise<SharedMemory> {
+    const raw = await this.fetch<unknown>(`/api/memories/${encodeURIComponent(id)}`);
+    return parseWithFallback(raw, SharedMemorySchema, EMPTY_SHARED_MEMORY, { endpoint: "GET /api/memories/{id}" });
+  }
+
+  async createMemory(data: CreateMemoryRequest): Promise<SharedMemory> {
+    const raw = await this.fetch<unknown>("/api/memories", {
+      method: "POST", body: JSON.stringify({ title: data.title, content: data.content, project_id: data.projectId, source: "manual" }),
+    });
+    return parseWithFallback(raw, SharedMemorySchema, EMPTY_SHARED_MEMORY, { endpoint: "POST /api/memories" });
+  }
+
+  async updateMemory(id: string, data: UpdateMemoryRequest): Promise<SharedMemory> {
+    const raw = await this.fetch<unknown>(`/api/memories/${encodeURIComponent(id)}`, {
+      method: "PUT", body: JSON.stringify({ title: data.title, content: data.content, expected_revision: data.expectedRevision }),
+    });
+    return parseWithFallback(raw, SharedMemorySchema, EMPTY_SHARED_MEMORY, { endpoint: "PUT /api/memories/{id}" });
+  }
+
+  async deleteMemory(id: string, expectedRevision: number): Promise<void> {
+    await this.fetch(`/api/memories/${encodeURIComponent(id)}?expected_revision=${expectedRevision}`, { method: "DELETE" });
+  }
+
+  async getMemorySettings(): Promise<MemorySettings> {
+    const raw = await this.fetch<unknown>("/api/memories/settings");
+    return parseWithFallback(raw, MemorySettingsSchema, EMPTY_MEMORY_SETTINGS, { endpoint: "GET /api/memories/settings" });
+  }
+
+  async updateMemorySettings(data: MemorySettings): Promise<MemorySettings> {
+    const raw = await this.fetch<unknown>("/api/memories/settings", {
+      method: "PUT", body: JSON.stringify({ automatic_extraction: data.automaticExtraction }),
+    });
+    return parseWithFallback(raw, MemorySettingsSchema, EMPTY_MEMORY_SETTINGS, { endpoint: "PUT /api/memories/settings" });
   }
 
   // Labels

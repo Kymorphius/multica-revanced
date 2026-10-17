@@ -1,0 +1,47 @@
+{
+  "title": "Mémoires partagées",
+  "create": "Enregistrer une mémoire",
+  "sharing": "Toutes les mémoires enregistrées sont visibles par les membres de l’espace de travail. Quel que soit leur fournisseur d’IA, les agents utilisent les mémoires de l’espace de travail et du projet de leur tâche.",
+  "automatic": {
+    "title": "Enregistrer automatiquement les expériences des tâches",
+    "description": "Les agents peuvent extraire des connaissances réutilisables pendant les tâches. Elles sont partagées dès leur enregistrement. Les discussions privées ne sont pas partagées automatiquement.",
+    "permission": "Seuls owner et admin peuvent modifier ce réglage.",
+    "failed": "Impossible de charger ou modifier l’enregistrement automatique."
+  },
+  "search": "Rechercher des mémoires",
+  "loading": "Chargement des mémoires...",
+  "load_failed": "Impossible de charger les mémoires",
+  "retry": "Réessayer",
+  "no_results": "Aucune mémoire correspondante",
+  "empty": "Aucune mémoire enregistrée",
+  "edit_named": "Modifier {{title}}",
+  "delete_named": "Supprimer {{title}}",
+  "project_scope": "Projet : {{name}}",
+  "workspace_scope": "Tout l’espace de travail",
+  "source": {
+    "manual": "Enregistrée manuellement",
+    "automatic": "Extraite automatiquement",
+    "unknown": "Source inconnue"
+  },
+  "load_more": "Charger plus",
+  "edit": "Modifier la mémoire",
+  "editor_hint": "Vérifiez la portée du partage. Elle ne peut plus être modifiée après l’enregistrement.",
+  "fields": {
+    "title": "Titre",
+    "content": "Contenu",
+    "scope": "Portée des tâches"
+  },
+  "conflict": "Cette mémoire a été modifiée pendant votre saisie. Votre brouillon est conservé. Consultez la dernière version.",
+  "conflict_load_failed": "Cette mémoire a été modifiée, mais la dernière version ne peut pas être chargée. Fermez puis rouvrez pour la consulter. Le brouillon reste ici.",
+  "save_failed": "Impossible d’enregistrer la mémoire. Votre brouillon est conservé.",
+  "latest": "Dernière version enregistrée",
+  "reload_latest": "Remplacer le brouillon par la dernière version",
+  "cancel": "Annuler",
+  "saving": "Enregistrement...",
+  "save": "Enregistrer",
+  "delete_title": "Supprimer la mémoire ?",
+  "delete_description": "Les membres et agents de l’espace de travail ne pourront plus utiliser « {{title}} ».",
+  "delete_conflict": "Cette mémoire a changé. Fermez cette fenêtre et actualisez la liste avant de la supprimer.",
+  "delete_failed": "Impossible de supprimer la mémoire. Fermez cette fenêtre et réessayez.",
+  "delete": "Supprimer"
+}

@@ -385,6 +385,12 @@ type AgentTaskResponse struct {
 	// regardless of issue / chat / autopilot / quick-create — sees the same
 	// shared context. Empty when the workspace owner hasn't set it.
 	WorkspaceContext string `json:"workspace_context,omitempty"`
+	// SharedMemories is a fresh workspace/project snapshot for this claim, not
+	// provider-native memory. Truncated also covers failed snapshot reads.
+	SharedMemories            []MemoryResponse `json:"shared_memories,omitempty"`
+	SharedMemoriesTruncated   bool             `json:"shared_memories_truncated,omitempty"`
+	SharedMemorySnapshotKnown bool             `json:"shared_memory_snapshot_known,omitempty"`
+	MemoryAutoExtract         bool             `json:"memory_auto_extract,omitempty"`
 	// IssueStatuses is the workspace's ACTIVE CUSTOM status catalog (MUL-6460),
 	// injected into the agent brief so agents can see and use statuses beyond
 	// the seven built-ins. Built-ins are omitted: their keys, names, and

@@ -54,6 +54,7 @@ export type NavLabelKey =
   | "squads"
   | "usage"
   | "runtimes"
+  | "memories"
   | "skills"
   | "settings";
 
@@ -69,6 +70,7 @@ export type WorkspacePageKey =
   | "squads"
   | "usage"
   | "runtimes"
+  | "memories"
   | "skills"
   | "settings";
 
@@ -96,6 +98,7 @@ export const WORKSPACE_PAGES: Record<WorkspacePageKey, WorkspacePage> = {
   squads: { segment: "squads", icon: "Users", navKey: "squads" },
   usage: { segment: "usage", icon: "BarChart3", navKey: "usage" },
   runtimes: { segment: "runtimes", icon: "Monitor", navKey: "runtimes" },
+  memories: { segment: "memories", icon: "BookOpenText", navKey: "memories" },
   skills: { segment: "skills", icon: "BookOpenText", navKey: "skills" },
   settings: { segment: "settings", icon: "Settings", navKey: "settings" },
 };

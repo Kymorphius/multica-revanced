@@ -122,6 +122,7 @@ type NavKey =
   | "squads"
   | "usage"
   | "runtimes"
+  | "memories"
   | "skills"
   | "settings";
 
@@ -138,6 +139,7 @@ type NavLabelKey =
   | "squads"
   | "usage"
   | "runtimes"
+  | "memories"
   | "skills"
   | "settings";
 
@@ -160,6 +162,7 @@ const aiTeamNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "agents", labelKey: "agents" },
   { key: "squads", labelKey: "squads" },
   { key: "skills", labelKey: "skills" },
+  { key: "memories", labelKey: "memories" },
   { key: "runtimes", labelKey: "runtimes" },
 ];
 

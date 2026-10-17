@@ -1188,6 +1188,20 @@ type Member struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type Memory struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	Title         string             `json:"title"`
+	Content       string             `json:"content"`
+	Source        string             `json:"source"`
+	Revision      int32              `json:"revision"`
+	CreatedByType string             `json:"created_by_type"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type NotificationPreference struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -1758,6 +1772,12 @@ type WorkspaceMcpServer struct {
 	CreatedBy   pgtype.UUID        `json:"created_by"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkspaceMemorySetting struct {
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	AutomaticExtraction bool               `json:"automatic_extraction"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WorkspaceShareLink struct {

@@ -7,6 +7,7 @@ import enAgents from "./en/agents.json";
 import enEditor from "./en/editor.json";
 import enOnboarding from "./en/onboarding.json";
 import enInvite from "./en/invite.json";
+import enMemories from "./en/memories.json";
 import enLabels from "./en/labels.json";
 import enMembers from "./en/members.json";
 import enMyIssues from "./en/my-issues.json";
@@ -32,6 +33,7 @@ import zhHansAgents from "./zh-Hans/agents.json";
 import zhHansEditor from "./zh-Hans/editor.json";
 import zhHansOnboarding from "./zh-Hans/onboarding.json";
 import zhHansInvite from "./zh-Hans/invite.json";
+import zhHansMemories from "./zh-Hans/memories.json";
 import zhHansLabels from "./zh-Hans/labels.json";
 import zhHansMembers from "./zh-Hans/members.json";
 import zhHansMyIssues from "./zh-Hans/my-issues.json";
@@ -57,6 +59,7 @@ import koAgents from "./ko/agents.json";
 import koEditor from "./ko/editor.json";
 import koOnboarding from "./ko/onboarding.json";
 import koInvite from "./ko/invite.json";
+import koMemories from "./ko/memories.json";
 import koLabels from "./ko/labels.json";
 import koMembers from "./ko/members.json";
 import koMyIssues from "./ko/my-issues.json";
@@ -82,6 +85,7 @@ import jaAgents from "./ja/agents.json";
 import jaEditor from "./ja/editor.json";
 import jaOnboarding from "./ja/onboarding.json";
 import jaInvite from "./ja/invite.json";
+import jaMemories from "./ja/memories.json";
 import jaLabels from "./ja/labels.json";
 import jaMembers from "./ja/members.json";
 import jaMyIssues from "./ja/my-issues.json";
@@ -107,6 +111,7 @@ import frAgents from "./fr/agents.json";
 import frEditor from "./fr/editor.json";
 import frOnboarding from "./fr/onboarding.json";
 import frInvite from "./fr/invite.json";
+import frMemories from "./fr/memories.json";
 import frLabels from "./fr/labels.json";
 import frMembers from "./fr/members.json";
 import frMyIssues from "./fr/my-issues.json";
@@ -138,6 +143,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     editor: enEditor,
     onboarding: enOnboarding,
     invite: enInvite,
+    memories: enMemories,
     labels: enLabels,
     members: enMembers,
     "my-issues": enMyIssues,
@@ -165,6 +171,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     editor: zhHansEditor,
     onboarding: zhHansOnboarding,
     invite: zhHansInvite,
+    memories: zhHansMemories,
     labels: zhHansLabels,
     members: zhHansMembers,
     "my-issues": zhHansMyIssues,
@@ -192,6 +199,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     editor: koEditor,
     onboarding: koOnboarding,
     invite: koInvite,
+    memories: koMemories,
     labels: koLabels,
     members: koMembers,
     "my-issues": koMyIssues,
@@ -219,6 +227,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     editor: jaEditor,
     onboarding: jaOnboarding,
     invite: jaInvite,
+    memories: jaMemories,
     labels: jaLabels,
     members: jaMembers,
     "my-issues": jaMyIssues,
@@ -246,6 +255,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     editor: frEditor,
     onboarding: frOnboarding,
     invite: frInvite,
+    memories: frMemories,
     labels: frLabels,
     members: frMembers,
     "my-issues": frMyIssues,

@@ -1,0 +1,47 @@
+{
+  "title": "Shared memories",
+  "create": "Save memory",
+  "sharing": "All saved memories are visible to workspace members. Agents across AI providers use workspace memories and memories for their task’s project.",
+  "automatic": {
+    "title": "Automatically save task experience",
+    "description": "Agents may extract reusable knowledge during tasks. Saved memories are shared immediately. Private chats are not automatically shared.",
+    "permission": "Only owner and admin can change this setting.",
+    "failed": "Unable to load or update automatic saving."
+  },
+  "search": "Search memories",
+  "loading": "Loading memories...",
+  "load_failed": "Unable to load memories",
+  "retry": "Try again",
+  "no_results": "No matching memories",
+  "empty": "No saved memories",
+  "edit_named": "Edit {{title}}",
+  "delete_named": "Delete {{title}}",
+  "project_scope": "Project: {{name}}",
+  "workspace_scope": "Whole workspace",
+  "source": {
+    "manual": "Manually saved",
+    "automatic": "Automatically extracted",
+    "unknown": "Unknown source"
+  },
+  "load_more": "Load more",
+  "edit": "Edit memory",
+  "editor_hint": "Choose the sharing scope carefully. The scope cannot be changed after saving.",
+  "fields": {
+    "title": "Title",
+    "content": "Content",
+    "scope": "Task scope"
+  },
+  "conflict": "This memory changed while you were editing. Your draft is preserved. Review the latest version before continuing.",
+  "conflict_load_failed": "This memory changed. Unable to load the latest version. Close and reopen to review it; your draft remains here.",
+  "save_failed": "Unable to save memory. Your draft is preserved.",
+  "latest": "Latest saved version",
+  "reload_latest": "Replace draft with latest version",
+  "cancel": "Cancel",
+  "saving": "Saving...",
+  "save": "Save",
+  "delete_title": "Delete memory?",
+  "delete_description": "“{{title}}” will no longer be available to workspace members or agents.",
+  "delete_conflict": "This memory has changed. Close this dialog and refresh the list before deleting.",
+  "delete_failed": "Unable to delete memory. Close this dialog and try again.",
+  "delete": "Delete"
+}

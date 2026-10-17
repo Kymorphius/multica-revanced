@@ -76,6 +76,7 @@ const WORKSPACE_ROUTES: readonly RoutePattern[] = [
   ["runtimes"],
   ["runtimes", ":id"],
   ["runtimes", ":id", "runtime", ":runtimeId"],
+  ["memories"],
   ["skills"],
   ["skills", ":id"],
   ["settings"],

@@ -49,6 +49,7 @@ import type {
   IssuePullRequestsResponse,
   InboxItem,
   InboxWorkspaceUnread,
+  SharedMemory,
   Label,
   MemberWithUser,
   IssueProperty,
@@ -3713,3 +3714,25 @@ export const RuntimeProfileSchema = z
     runtime_type: profile.runtime_type || profile.protocol_family,
   }));
 export const RuntimeProfileListSchema = z.array(RuntimeProfileSchema);
+
+export const SharedMemorySchema = z.object({
+  id: z.string(), workspace_id: z.string().catch(""), project_id: z.string().nullable().catch(null),
+  title: z.string().catch(""), content: z.string().catch(""),
+  source: z.enum(["manual", "automatic", "unknown"]).catch("unknown"),
+  revision: z.number().int().nonnegative().catch(0),
+  created_by_type: z.string().catch(""), created_by: z.string().catch(""),
+  created_at: z.string().catch(""), updated_at: z.string().catch(""),
+}).transform((value) => ({
+  id: value.id, workspaceId: value.workspace_id, projectId: value.project_id,
+  title: value.title, content: value.content, source: value.source, revision: value.revision,
+  createdByType: value.created_by_type, createdBy: value.created_by,
+  createdAt: value.created_at, updatedAt: value.updated_at,
+}));
+export const SharedMemoryListSchema = z.array(SharedMemorySchema);
+export const EMPTY_SHARED_MEMORY: SharedMemory = {
+  id: "", workspaceId: "", projectId: null, title: "", content: "", source: "unknown", revision: 0,
+  createdByType: "", createdBy: "", createdAt: "", updatedAt: "",
+};
+export const MemorySettingsSchema = z.object({ automatic_extraction: z.boolean().catch(false) })
+  .transform((value) => ({ automaticExtraction: value.automatic_extraction }));
+export const EMPTY_MEMORY_SETTINGS = { automaticExtraction: false };

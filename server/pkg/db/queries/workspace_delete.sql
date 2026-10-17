@@ -317,6 +317,12 @@ deleted_task_tokens AS (
     DELETE FROM task_token
     WHERE workspace_id = $1
 ),
+deleted_memories AS (
+    DELETE FROM memory WHERE workspace_id = $1
+),
+deleted_memory_settings AS (
+    DELETE FROM workspace_memory_settings WHERE workspace_id = $1
+),
 deleted_orphan_task_supplements AS (
     DELETE FROM task_supplement WHERE workspace_id = $1
 ),

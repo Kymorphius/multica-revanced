@@ -2293,6 +2293,17 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Put("/{sessionId}/draft", h.SaveAgentBuilderDraft)
 			})
 
+			// Shared workspace and project memories.
+			r.Route("/api/memories", func(r chi.Router) {
+				r.Get("/", h.ListMemories)
+				r.Post("/", h.CreateMemory)
+				r.Get("/settings", h.GetMemorySettings)
+				r.Put("/settings", h.UpdateMemorySettings)
+				r.Get("/{id}", h.GetMemory)
+				r.Put("/{id}", h.UpdateMemory)
+				r.Delete("/{id}", h.DeleteMemory)
+			})
+
 			// Skills
 			r.Route("/api/skills", func(r chi.Router) {
 				r.Get("/", h.ListSkills)

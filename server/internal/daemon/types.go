@@ -65,6 +65,21 @@ type IssueStatusData struct {
 	Description string `json:"description,omitempty"`
 }
 
+// SharedMemoryData mirrors the server's provider-independent memory snapshot.
+type SharedMemoryData struct {
+	ID            string  `json:"id"`
+	WorkspaceID   string  `json:"workspace_id"`
+	ProjectID     *string `json:"project_id"`
+	Title         string  `json:"title"`
+	Content       string  `json:"content"`
+	Source        string  `json:"source"`
+	Revision      int32   `json:"revision"`
+	CreatedByType string  `json:"created_by_type"`
+	CreatedBy     string  `json:"created_by"`
+	CreatedAt     string  `json:"created_at"`
+	UpdatedAt     string  `json:"updated_at"`
+}
+
 // Task represents a claimed task from the server.
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
@@ -90,7 +105,11 @@ type Task struct {
 	// prompt set in Settings → General). Server populates this on every claim
 	// regardless of task kind so the daemon can inject `## Workspace Context`
 	// into the brief. Empty when the owner hasn't set one.
-	WorkspaceContext string `json:"workspace_context,omitempty"`
+	WorkspaceContext          string             `json:"workspace_context,omitempty"`
+	SharedMemories            []SharedMemoryData `json:"shared_memories,omitempty"`
+	SharedMemoriesTruncated   bool               `json:"shared_memories_truncated,omitempty"`
+	SharedMemorySnapshotKnown bool               `json:"shared_memory_snapshot_known,omitempty"`
+	MemoryAutoExtract         bool               `json:"memory_auto_extract,omitempty"`
 	// IssueStatuses mirrors the claim payload's active CUSTOM status catalog
 	// (MUL-6460): key/name/category/description per status, already in catalog
 	// order. Rendered into the brief's status-command line; empty (including on

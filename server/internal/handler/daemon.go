@@ -3525,6 +3525,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	if failure := h.rejectClaimOnWorkspaceMismatch(r.Context(), task, resp.WorkspaceID, runtimeID, runtimeWorkspaceID, hasQuickCreate); failure != nil {
 		return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, failure
 	}
+	h.hydrateClaimSharedMemory(r.Context(), *task, &resp)
 
 	// Workspace-level Context (workspace.context DB column) — the per-workspace
 	// system prompt that workspace owners set in Settings → General. Inject it
@@ -3670,6 +3671,40 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	}
 
 	return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, nil
+}
+
+// hydrateClaimSharedMemory runs only after the claim's workspace boundary and
+// project resolution. A fresh snapshot reaches resumed provider sessions too.
+func (h *Handler) hydrateClaimSharedMemory(ctx context.Context, task db.AgentTaskQueue, resp *AgentTaskResponse) {
+	params := db.ListMemoriesForContextParams{WorkspaceID: parseUUID(resp.WorkspaceID)}
+	if resp.ProjectID != "" {
+		params.ProjectID = parseUUID(resp.ProjectID)
+	}
+	rows, err := h.Queries.ListMemoriesForContext(ctx, params)
+	if err != nil {
+		resp.SharedMemoriesTruncated = true
+		slog.Warn("task claim: failed to load shared memories", "task_id", resp.ID, "workspace_id", resp.WorkspaceID, "error", err)
+	} else {
+		resp.SharedMemorySnapshotKnown = true
+		for i, row := range rows {
+			if i == 50 {
+				resp.SharedMemoriesTruncated = true
+				break
+			}
+			resp.SharedMemories = append(resp.SharedMemories, memoryToResponse(row))
+		}
+	}
+	// Only public issue work may automatically publish knowledge. Chat tasks
+	// can also have an IssueID; the stable kind, not that FK alone, gates this.
+	kind := computeTaskKind(task)
+	if kind != "direct" && kind != "comment" {
+		return
+	}
+	if enabled, err := h.Queries.GetMemoryAutomaticExtraction(ctx, params.WorkspaceID); err != nil {
+		slog.Warn("task claim: failed to load shared memory settings", "task_id", resp.ID, "workspace_id", resp.WorkspaceID, "error", err)
+	} else {
+		resp.MemoryAutoExtract = enabled
+	}
 }
 
 // worktreeClaimBlockReason returns a user-facing reason when this runtime must
