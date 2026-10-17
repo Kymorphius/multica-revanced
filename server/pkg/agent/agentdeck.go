@@ -174,6 +174,10 @@ func (b *agentdeckBackend) resolveGroup(ctx context.Context, prompt string) stri
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	return b.groupFromIssue(ctx, m[1])
+}
+
+func (b *agentdeckBackend) groupFromIssue(ctx context.Context, issueID string) string {
 	var defs struct {
 		Properties []struct {
 			ID       string `json:"id"`
@@ -197,7 +201,7 @@ func (b *agentdeckBackend) resolveGroup(ctx context.Context, prompt string) stri
 	var issue struct {
 		Properties map[string]any `json:"properties"`
 	}
-	if err := b.apiGet(ctx, "/api/issues/"+m[1], &issue); err != nil {
+	if err := b.apiGet(ctx, "/api/issues/"+issueID, &issue); err != nil {
 		b.cfg.Logger.Info("agent-deck group: issue unreadable, using default", "error", err)
 		return agentdeckGroup
 	}
@@ -230,6 +234,45 @@ func agentdeckHasGroup(nodes []agentdeckGroupNode, path string) bool {
 	return false
 }
 
+// groupDir is the group's default working directory in agent-deck, when it
+// has one that exists; "" otherwise.
+func (b *agentdeckBackend) groupDir(ctx context.Context, group string) string {
+	if group == "" || group == agentdeckGroup {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	raw, err := b.runCmd(ctx, "", "group", "show", group, "--json")
+	var g struct {
+		DefaultPath string `json:"default_path"`
+	}
+	if err != nil || json.Unmarshal(bytes.TrimSpace(raw), &g) != nil || !filepath.IsAbs(g.DefaultPath) {
+		return ""
+	}
+	if st, err := os.Stat(g.DefaultPath); err != nil || !st.IsDir() {
+		return ""
+	}
+	return g.DefaultPath
+}
+
+// projectPrompt carries the Multica runtime brief in the first message when
+// the session works in the project directory instead of the task workdir,
+// so nothing is written into the user's repository.
+func projectPrompt(prompt, workdir, project string) string {
+	brief, _ := os.ReadFile(filepath.Join(workdir, "CLAUDE.md"))
+	if len(brief) > 64*1024 {
+		brief = brief[:64*1024]
+	}
+	var sb strings.Builder
+	sb.WriteString("你在项目目录 " + project + " 中处理这个 Multica 任务。Multica 为本任务准备的目录是 " + workdir +
+		"，需要临时文件时放在那里，不要在项目里留下与任务无关的文件。\n\n")
+	if s := strings.TrimSpace(string(brief)); s != "" {
+		sb.WriteString("以下是 Multica 的任务运行说明（原本写在任务目录的 CLAUDE.md 中）：\n\n" + s + "\n\n---\n\n")
+	}
+	sb.WriteString(prompt)
+	return sb.String()
+}
+
 func (b *agentdeckBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	if b.run == nil {
 		if _, err := exec.LookPath(b.exe()); err != nil {
@@ -259,8 +302,14 @@ func (b *agentdeckBackend) Execute(ctx context.Context, prompt string, opts Exec
 		title = "Multica " + shortID(b.cfg.TaskID)
 	}
 	group := b.resolveGroup(ctx, prompt)
+	// A project group's session works in the group's default directory (the
+	// project), with the runtime brief moved into the first message.
+	cwd := opts.Cwd
+	if dir := b.groupDir(ctx, group); dir != "" {
+		cwd, prompt = dir, projectPrompt(prompt, opts.Cwd, dir)
+	}
 	args := []string{"launch", "-c", agentdeckTool(opts.CustomArgs), "--json", "-t", title, "-g", group,
-		"-no-parent", "--env-file", envFile, "--message-file", "-", opts.Cwd}
+		"-no-parent", "--env-file", envFile, "--message-file", "-", cwd}
 	launchCtx, launchCancel := context.WithTimeout(ctx, 3*time.Minute)
 	out, err := b.runCmd(launchCtx, prompt, args...)
 	launchCancel()
@@ -280,7 +329,7 @@ func (b *agentdeckBackend) Execute(ctx context.Context, prompt string, opts Exec
 		}
 		return nil, err
 	}
-	b.cfg.Logger.Info("agent-deck session launched", "session", id, "group", group, "cwd", opts.Cwd)
+	b.cfg.Logger.Info("agent-deck session launched", "session", id, "group", group, "cwd", cwd)
 
 	msgs := make(chan Message, 64)
 	results := make(chan Result, 1)

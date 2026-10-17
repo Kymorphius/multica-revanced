@@ -20,6 +20,7 @@ type fakeAgentdeck struct {
 	output   string
 	envSeen  string
 	envMode  os.FileMode
+	groupDir string
 }
 
 func (f *fakeAgentdeck) run(_ context.Context, stdin string, args ...string) ([]byte, error) {
@@ -43,6 +44,8 @@ func (f *fakeAgentdeck) run(_ context.Context, stdin string, args ...string) ([]
 			st, f.statuses = f.statuses[0], f.statuses[1:]
 		}
 		return []byte(`{"id":"sess-1","status":"` + st + `"}`), nil
+	case args[0] == "group" && args[1] == "show":
+		return []byte(`{"path":"` + args[2] + `","default_path":"` + f.groupDir + `"}`), nil
 	case args[0] == "group":
 		return []byte(`{"groups":[{"path":"Tools","children":[{"path":"Tools/Agent-Deck"}]},{"path":"Multica"}]}`), nil
 	case args[0] == "session" && args[1] == "output":
@@ -215,4 +218,51 @@ func agentdeckSilent(t *testing.T) Result {
 		t.Fatal("no result")
 	}
 	return Result{}
+}
+
+func TestAgentdeckProjectGroupWorksInGroupDirectory(t *testing.T) {
+	issueID := "11111111-1111-4111-8111-111111111111"
+	do := func(req *http.Request) (*http.Response, error) {
+		body := `{"properties":[{"id":"p1","name":"agent-deck 分组"}]}`
+		if strings.HasPrefix(req.URL.Path, "/api/issues/") {
+			body = `{"properties":{"p1":"Tools/Agent-Deck"}}`
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}
+	project, workdir := t.TempDir(), t.TempDir()
+	_ = os.WriteFile(workdir+"/CLAUDE.md", []byte("MULTICA BRIEF"), 0o644)
+	prompt := "Your assigned issue ID is: " + issueID + "\n"
+	run := func(groupDir string) (*fakeAgentdeck, []string) {
+		f := &fakeAgentdeck{statuses: []string{"running", "waiting"}, output: "ok", groupDir: groupDir}
+		b := newFakeAgentdeckBackend(f)
+		b.do = do
+		b.cfg.Env["MULTICA_SERVER_URL"], b.cfg.Env["MULTICA_TOKEN"] = "http://server.test", "mat_t"
+		s, err := b.Execute(context.Background(), prompt, ExecOptions{Cwd: workdir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitResult(t, s)
+		for i, c := range f.calls {
+			if c[0] == "launch" {
+				f.stdin = []string{f.stdin[i]}
+				return f, c
+			}
+		}
+		t.Fatal("no launch")
+		return nil, nil
+	}
+	f, launch := run(project)
+	if launch[len(launch)-1] != project || !strings.Contains(strings.Join(launch, " "), "-g Tools/Agent-Deck") {
+		t.Fatalf("launch = %v", launch)
+	}
+	if in := f.stdin[0]; !strings.Contains(in, "MULTICA BRIEF") || !strings.Contains(in, workdir) || !strings.HasSuffix(in, prompt) {
+		t.Fatalf("first message = %q", in)
+	}
+	if _, err := os.Stat(project + "/CLAUDE.md"); !os.IsNotExist(err) {
+		t.Fatal("nothing may be written into the project")
+	}
+	f, launch = run(project + "/missing")
+	if launch[len(launch)-1] != workdir || f.stdin[0] != prompt {
+		t.Fatalf("a missing group directory keeps the task workdir: %v %q", launch, f.stdin[0])
+	}
 }
