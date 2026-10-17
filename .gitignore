@@ -81,3 +81,9 @@ __pycache__/
 perf-report/
 # The production example is a tracked template; `.env*` above would hide it.
 !apps/mobile/.env.production.example
+
+# Personal deployment tooling and operational records stay local/private.
+/deploy/k02/
+/scripts/connect-k02-multica.py
+/scripts/connect-k02-multica-windows.ps1
+/scripts/multica_migration/
