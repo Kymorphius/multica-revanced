@@ -180,3 +180,39 @@ func TestAgentdeckGroupFromIssueProperty(t *testing.T) {
 		t.Fatalf("no token: %q", got)
 	}
 }
+
+func TestAgentdeckWaitsWhileQueuedAndFailsSilentSessions(t *testing.T) {
+	queued := []string{}
+	for i := 0; i < 40; i++ { // longer than the settle window: queued must never end the turn
+		queued = append(queued, "queued")
+	}
+	f := &fakeAgentdeck{statuses: append(queued, "running", "waiting"), output: "做完了"}
+	b := newFakeAgentdeckBackend(f)
+	s, err := b.Execute(context.Background(), "x", ExecOptions{Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := waitResult(t, s); r.Status != "completed" || r.Output != "做完了" {
+		t.Fatalf("queued then ran: %+v", r)
+	}
+	if r := agentdeckSilent(t); r.Status != "failed" {
+		t.Fatalf("never ran and said nothing must fail: %+v", r)
+	}
+}
+
+func agentdeckSilent(t *testing.T) Result {
+	f := &fakeAgentdeck{statuses: []string{"waiting"}}
+	b := newFakeAgentdeckBackend(f)
+	b.poll, b.settle, b.grace = time.Millisecond, time.Millisecond, 20*time.Millisecond
+	s, err := b.Execute(context.Background(), "x", ExecOptions{Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-s.Result:
+		return r
+	case <-time.After(5 * time.Second):
+		t.Fatal("no result")
+	}
+	return Result{}
+}

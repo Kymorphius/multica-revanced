@@ -30,6 +30,9 @@ type agentdeckBackend struct {
 	// poll is the status polling interval; settle is how long a finished
 	// status must hold before the turn counts as ended.
 	poll, settle time.Duration
+	// grace is how long a session that never shows "running" may sit in a
+	// finished-looking status before that counts as the end (default 1 min).
+	grace time.Duration
 	// do sends Multica API requests; tests replace it.
 	do func(*http.Request) (*http.Response, error)
 }
@@ -243,6 +246,10 @@ func (b *agentdeckBackend) Execute(ctx context.Context, prompt string, opts Exec
 	if settle <= 0 {
 		settle = 8 * time.Second
 	}
+	grace := b.grace
+	if grace <= 0 {
+		grace = time.Minute
+	}
 	envFile, cleanup, err := writeAgentdeckEnv(b.cfg.Env)
 	if err != nil {
 		return nil, fmt.Errorf("agent-deck env file: %w", err)
@@ -325,17 +332,25 @@ func (b *agentdeckBackend) Execute(ctx context.Context, prompt string, opts Exec
 				continue // transient; the run timeout still bounds the wait
 			}
 			switch show.Status {
-			case "running", "starting":
+			case "running":
 				seenRunning, endedAt = true, time.Time{}
 				send(Message{Type: MessageStatus, Status: "running", SessionID: id})
 				continue
 			case "error":
 				finish(Result{Status: "failed", Error: "agent-deck session " + id + " is in error state"})
 				return
+			case "waiting", "idle", "stopped":
+			default:
+				// queued (the group is at its max_concurrent cap), starting, or a
+				// status this backend does not know: keep waiting — the run
+				// timeout still bounds it — and keep the idle watchdog fed.
+				endedAt = time.Time{}
+				send(Message{Type: MessageStatus, Status: show.Status, SessionID: id})
+				continue
 			}
 			// waiting / idle / stopped: the turn ended once it has held for settle
 			// (and the session ran at all, or a minute passed without it starting).
-			if !seenRunning && time.Since(started) < time.Minute {
+			if !seenRunning && time.Since(started) < grace {
 				continue
 			}
 			if endedAt.IsZero() {
@@ -352,6 +367,10 @@ func (b *agentdeckBackend) Execute(ctx context.Context, prompt string, opts Exec
 				Content string `json:"content"`
 			}
 			_ = json.Unmarshal(bytes.TrimSpace(rawOut), &reply)
+			if !seenRunning && strings.TrimSpace(reply.Content) == "" {
+				finish(Result{Status: "failed", Error: "agent-deck session " + id + " ended without running or replying"})
+				return
+			}
 			finish(agentdeckResult(reply.Content))
 			return
 		}
